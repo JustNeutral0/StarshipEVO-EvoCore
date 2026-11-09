@@ -22,9 +22,13 @@ namespace EvoCore
     {
         public static float Height = 240f;        // canvas units, top to bottom
         public static int Supersample = 3;         // texture pixels per canvas unit
-        public static bool Crt = true;
-        public static float Glow = 1.35f;          // brightness of the glass (above 1 feeds the game's bloom)
+        public static bool Crt = false;            // off by default: the game's own holo screens and helmet view already have their look
+        public static float Glow = 0.85f;          // brightness of the glass (above 1 feeds the game's bloom)
         public static float Bulge = 0.03f;         // how far the glass domes out, as a share of its shorter side
+        public static bool FillFace = true;       // the picture covers the whole lit face (square and rim), not just the square
+        public static float Lift = 0.0005f;        // how far the glass sits off the monitor's face: enough not to flicker, little enough not to show an edge
+        public static float Backdrop = 1f;         // how solid the glass's own background is (0 clear, 1 solid; below 1 the monitor's icon shows through)
+        public static float BackdropLift = 0f;     // the background: the monitor's paint, this far towards white
 
         public class Display
         {
@@ -39,10 +43,16 @@ namespace EvoCore
             public RenderTexture Draw, Shown;
             public GameObject Go;
             public Mesh Glass;
-            public Material Material, Picture;
+            public Material Material, Picture, Sides;   // Sides: the face's tapered edges, plain background
             public long Shape;
             public float Born;
             public readonly List<Mesh> Pool = new List<Mesh>();
+            public Vector3 C00, C10, C01, Normal;  // the picture square in its ship's space (canvas left/bottom corner, right, top)
+            public readonly List<(string name, Rect rect)> Buttons = new List<(string, Rect)>();
+            public string Hovered;                 // the button under the player's cursor, drawn lit
+            public Color Tint = Color.white;       // the monitor's paint
+            public bool Domed;                     // the glass is the domed square, not the monitor's own face
+            public float Backdrop = -1f;           // this display's background opacity; below 0 means Monitors.Backdrop
         }
 
         public struct Cmd
@@ -148,6 +158,7 @@ namespace EvoCore
             if (d.Go != null) UnityEngine.Object.Destroy(d.Go);
             if (d.Glass != null) UnityEngine.Object.Destroy(d.Glass);
             if (d.Material != null) UnityEngine.Object.Destroy(d.Material);
+            if (d.Sides != null) UnityEngine.Object.Destroy(d.Sides);
             if (d.Picture != null) UnityEngine.Object.Destroy(d.Picture);
             if (d.Draw != null) d.Draw.Release();
             if (d.Shown != null) d.Shown.Release();
@@ -177,6 +188,9 @@ namespace EvoCore
                     var flicker = boot < 1f ? boot * (0.75f + 0.25f * Mathf.Sin(Time.time * 90f)) : 1f;
                     var glow = (d.Glow >= 0f ? d.Glow : Glow) * flicker;
                     d.Material.color = new Color(glow, glow, glow, 1f);
+                    var side = Color.Lerp(d.Tint, Color.white, BackdropLift) * glow;
+                    side.a = 1f;
+                    d.Sides.color = side;
                     if (d.Dirty) { Render(d); d.Dirty = false; }
                 }
                 catch (Exception e) { Core.Log.Error("Lua display: " + e); Drop(d.Block, d); break; }
@@ -199,7 +213,103 @@ namespace EvoCore
                 }
                 catch { }
             }
+            PlaceCursor();
         }
+
+        // ---- Touch: where a ray meets a display's picture (Touch.cs) ----
+
+        // The nearest monitor picture the ray meets within reach, among those wanted, and where on its canvas (units,
+        // y down). The glass's slight dome and the CRT bend are ignored: a few canvas units off at the very corners.
+        internal static bool Hit(Ray ray, float reach, Func<Display, bool> wanted, out Display hit, out Vector2 at)
+        {
+            hit = null; at = default;
+            var best = reach;
+            foreach (var d in displays.Values)
+            {
+                if (d.External || d.Go == null || !wanted(d)) continue;
+                Matrix4x4 m;
+                try { m = d.Block.brickCoord.TransformData.localToWorldMatrix; } catch { continue; }
+                var inv = m.inverse;
+                var o = inv.MultiplyPoint3x4(ray.origin);
+                var dir = inv.MultiplyVector(ray.direction);
+                var facing = Vector3.Dot(dir, d.Normal);
+                if (facing >= -1e-6f) continue;                       // from behind or edge on
+                var t = Vector3.Dot(d.C00 - o, d.Normal) / facing;
+                if (t < 0f) continue;
+                var p = o + dir * t;
+                var dist = (m.MultiplyPoint3x4(p) - ray.origin).magnitude;
+                if (dist > best) continue;
+                // p - C00 = a * U + b * V, solved in the plane.
+                Vector3 u = d.C10 - d.C00, v = d.C01 - d.C00, w = p - d.C00;
+                float uu = Vector3.Dot(u, u), uv = Vector3.Dot(u, v), vv = Vector3.Dot(v, v), wu = Vector3.Dot(w, u), wv = Vector3.Dot(w, v);
+                var det = uu * vv - uv * uv;
+                if (Mathf.Abs(det) < 1e-12f) continue;
+                float a = (vv * wu - uv * wv) / det, b = (uu * wv - uv * wu) / det;
+                if (a < 0f || a > 1f || b < 0f || b > 1f) continue;
+                best = dist; hit = d;
+                at = new Vector2(a * d.Width, (1f - b) * d.Height);
+            }
+            return hit != null;
+        }
+
+        // The cursor: a small bright dot on the glass where the player aims, or hidden.
+        static GameObject cursor;
+        static Display cursorOn;
+        static Vector3 cursorAt;
+
+        internal static void ShowCursor(Display d, Vector2 at)
+        {
+            if (d == null || d.Go == null) { if (cursor != null) cursor.SetActive(false); cursorOn = null; return; }
+            if (cursor == null)
+            {
+                Materials();
+                var mesh = new Mesh { name = "Lua display cursor" };
+                var pts = new List<Vector3> { Vector3.zero };
+                for (int i = 0; i <= 16; i++) pts.Add(new Vector3(Mathf.Cos(i * Mathf.PI / 8f), Mathf.Sin(i * Mathf.PI / 8f), 0f));
+                var tris = new List<int>();
+                for (int i = 1; i <= 16; i++) tris.AddRange(new[] { 0, i + 1, i, 0, i, i + 1 });   // both faces
+                mesh.SetVertices(pts);
+                mesh.SetColors(pts.Select(_ => Color.white).ToList());
+                mesh.SetTriangles(tris, 0);
+                cursor = new GameObject("Lua display cursor");
+                cursor.AddComponent<MeshFilter>().sharedMesh = mesh;
+                cursor.AddComponent<MeshRenderer>().sharedMaterial = new Material(glassBase) { name = "Lua display cursor", color = new Color(1.6f, 1.6f, 1.6f, 0.9f), renderQueue = 3001 };
+            }
+            float a = at.x / Mathf.Max(1f, d.Width), b = 1f - at.y / Mathf.Max(1f, d.Height);
+            var dome = d.Domed ? Bulge * Mathf.Min((d.C10 - d.C00).magnitude, (d.C01 - d.C00).magnitude) : 0f;
+            float ex = 2f * a - 1f, ey = 2f * b - 1f;
+            // On the domed glass, a hair above it.
+            cursorAt = d.C00 + (d.C10 - d.C00) * a + (d.C01 - d.C00) * b + d.Normal * (0.006f + dome * (1f - ex * ex) * (1f - ey * ey));
+            cursorOn = d;
+            cursor.SetActive(true);
+        }
+
+        static void PlaceCursor()
+        {
+            if (cursor == null || cursorOn == null || !cursor.activeSelf) return;
+            try
+            {
+                var m = cursorOn.Block.brickCoord.TransformData.localToWorldMatrix;
+                var size = 0.012f * Mathf.Min((cursorOn.C10 - cursorOn.C00).magnitude, (cursorOn.C01 - cursorOn.C00).magnitude) / 0.5f;
+                cursor.transform.SetPositionAndRotation(m.MultiplyPoint3x4(cursorAt), Quaternion.LookRotation(m.MultiplyVector(cursorOn.Normal), m.MultiplyVector(cursorOn.C01 - cursorOn.C00)));
+                cursor.transform.localScale = Vector3.one * Mathf.Clamp(size * m.lossyScale.x, 0.004f, 0.03f);
+            }
+            catch { cursor.SetActive(false); }
+        }
+
+        // Which display number (or display port name) a block is for its computer, as scripts name it.
+        internal static DynValue NameOf(Display d)
+        {
+            var names = Lua.DeclaredOf(d.Owner)?.Displays;
+            var linked = Linked(d.Owner);
+            if (names != null)
+                foreach (var n in names)
+                    if (Lua.DisplayBlock(d.Owner, DynValue.NewString(n), linked) == d.Block) return DynValue.NewString(n);
+            var i = linked.IndexOf(d.Block);
+            return DynValue.NewNumber(i >= 0 ? i + 1 : 1);
+        }
+
+        internal static Display Of(Command block) => block != null && displays.TryGetValue(block, out var d) ? d : null;
 
         // ---- The glass: the monitor's picture square, in its ship's space ----
 
@@ -247,14 +357,45 @@ namespace EvoCore
                 return points[best];
             }
             Vector3 c00 = Corner(u0, v0), c10 = Corner(u1, v0), c01 = Corner(u0, v1), c11 = Corner(u1, v1);
-            float w = (c10 - c00).magnitude, h = (c01 - c00).magnitude;
             var normal = Vector3.Cross(c10 - c00, c01 - c00).normalized;
             // Facing out of the block: away from its centre.
             if (Vector3.Dot(normal, c00 - b.Position) < 0f) normal = -normal;
+            var face = FillFace ? Grow(b, mesh, normal, ref c00, ref c10, ref c01, ref c11) : null;
+            float w = (c10 - c00).magnitude, h = (c01 - c00).magnitude;
+            d.C00 = c00; d.C10 = c10; d.C01 = c01; d.Normal = normal;
+            d.Tint = b.color;
             d.Height = Height;
             d.Width = Mathf.Round(Height * w / Mathf.Max(1e-4f, h));
 
-            // A domed grid: flat at the edges, out by Bulge in the middle; 2 mm off the square so it never fights it.
+            if (d.Glass == null) d.Glass = new Mesh { name = "Lua display glass" };
+            d.Glass.Clear();
+            if (face != null && face.Count >= 3) FaceGlass(d, face);
+            else SquareGlass(d, c00, c10, c01, c11, normal, w, h);
+
+            int pw = Mathf.Clamp((int)(d.Width * Supersample), 16, 2048), ph = Mathf.Clamp((int)(d.Height * Supersample), 16, 2048);
+            if (d.Draw == null || d.Draw.width != pw || d.Draw.height != ph)
+            {
+                if (d.Draw != null) d.Draw.Release();
+                if (d.Shown != null) d.Shown.Release();
+                d.Draw = new RenderTexture(pw, ph, 0, RenderTextureFormat.ARGB32) { name = "Lua display draw", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+                d.Shown = new RenderTexture(pw, ph, 0, RenderTextureFormat.ARGB32) { name = "Lua display", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+            }
+            if (d.Go == null)
+            {
+                Materials();
+                d.Go = new GameObject("Lua display");
+                d.Go.AddComponent<MeshFilter>().sharedMesh = d.Glass;
+                d.Material = new Material(glassBase) { name = "Lua display glass", mainTexture = d.Shown };
+                d.Sides = new Material(glassBase) { name = "Lua display sides", mainTexture = Texture2D.whiteTexture };
+                d.Go.AddComponent<MeshRenderer>().sharedMaterials = new[] { d.Material, d.Sides };
+            }
+            d.Dirty = true;
+        }
+
+        // No face found: a domed grid over the square, flat at the edges, out by Bulge in the middle; 2 mm off the
+        // square so it never fights it.
+        static void SquareGlass(Display d, Vector3 c00, Vector3 c10, Vector3 c01, Vector3 c11, Vector3 normal, float w, float h)
+        {
             const int n = 12;
             var verts = new Vector3[(n + 1) * (n + 1)];
             var tex = new Vector2[verts.Length];
@@ -276,30 +417,101 @@ namespace EvoCore
                     int a = y * (n + 1) + x, bb = a + 1, c = a + n + 1, dd = c + 1;
                     tris.AddRange(new[] { a, c, bb, bb, c, dd });
                 }
-            if (d.Glass == null) d.Glass = new Mesh { name = "Lua display glass" };
-            d.Glass.Clear();
             d.Glass.vertices = verts;
             d.Glass.uv = tex;
+            d.Glass.subMeshCount = 2;
             d.Glass.SetTriangles(tris, 0);
+            d.Glass.SetTriangles(new int[0], 1);
             d.Glass.RecalculateBounds();
+            d.Domed = true;
+        }
 
-            int pw = Mathf.Clamp((int)(d.Width * Supersample), 16, 2048), ph = Mathf.Clamp((int)(d.Height * Supersample), 16, 2048);
-            if (d.Draw == null || d.Draw.width != pw || d.Draw.height != ph)
+        // The glass on the monitor's own face: its triangles (square, rim, cut corners and all), a hair in front of
+        // each, with the picture laid on flat across the grown square.
+        static void FaceGlass(Display d, List<Vector3> face)
+        {
+            Vector3 u = d.C10 - d.C00, v = d.C01 - d.C00;
+            var verts = new List<Vector3>(face.Count);
+            var tex = new List<Vector2>(face.Count);
+            var tris = new List<int>(face.Count);
+            var sides = new List<int>();
+            for (int t = 0; t + 2 < face.Count; t += 3)
             {
-                if (d.Draw != null) d.Draw.Release();
-                if (d.Shown != null) d.Shown.Release();
-                d.Draw = new RenderTexture(pw, ph, 0, RenderTextureFormat.ARGB32) { name = "Lua display draw", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
-                d.Shown = new RenderTexture(pw, ph, 0, RenderTextureFormat.ARGB32) { name = "Lua display", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+                // The monitor mesh's own winding points each face out (front and tapered sides alike).
+                var n = Vector3.Cross(face[t + 1] - face[t], face[t + 2] - face[t]).normalized;
+                for (int k = 0; k < 3; k++)
+                {
+                    var p = face[t + k];
+                    var w = p - d.C00;
+                    tex.Add(new Vector2(Vector3.Dot(w, u) / u.sqrMagnitude, Vector3.Dot(w, v) / v.sqrMagnitude));
+                    verts.Add(p + n * Lift);
+                }
+                int s = verts.Count - 3;
+                // Reversed, as the grid's are, to show from outside. The steep tapered sides get the plain background
+                // (as the game's own sides are), not the picture smeared along them.
+                (Vector3.Dot(n, d.Normal) < 0.3f ? sides : tris).AddRange(new[] { s, s + 2, s + 1 });
             }
-            if (d.Go == null)
+            d.Glass.SetVertices(verts);
+            d.Glass.SetUVs(0, tex);
+            d.Glass.subMeshCount = 2;
+            d.Glass.SetTriangles(tris, 0);
+            d.Glass.SetTriangles(sides, 1);
+            d.Glass.RecalculateBounds();
+            d.Domed = false;
+        }
+
+        // The picture square sits inside a glowing rim that slopes back from it (a Monitor's: 2.5% wider, 1.8 cm deep),
+        // so the lit face is bigger than the square. Grows the square, in its own plane, over every face turned the
+        // screen's way that lies close behind it (the rim, not the body further back).
+        static List<Vector3> Grow(BrickInstanceData b, VoxelMesh mesh, Vector3 normal, ref Vector3 c00, ref Vector3 c10, ref Vector3 c01, ref Vector3 c11)
+        {
+            var face = new List<Vector3>();
+            var buffer = mesh.meshBuffer;
+            Vector3 u = c10 - c00, v = c01 - c00;
+            var depth = 0.1f * Mathf.Min(u.magnitude, v.magnitude);
+            float a0 = 0f, a1 = 1f, b0 = 0f, b1 = 1f;
+            for (int t = 0; t + 2 < buffer.triangles.Count; t += 3)
             {
-                Materials();
-                d.Go = new GameObject("Lua display");
-                d.Go.AddComponent<MeshFilter>().sharedMesh = d.Glass;
-                d.Material = new Material(glassBase) { name = "Lua display glass", mainTexture = d.Shown };
-                d.Go.AddComponent<MeshRenderer>().sharedMaterial = d.Material;
+                var p0 = b.Position + b.Quaternion * (b.GridSize * mesh.ResizePoint(b.Scale, buffer.vertices[buffer.triangles[t]]));
+                var p1 = b.Position + b.Quaternion * (b.GridSize * mesh.ResizePoint(b.Scale, buffer.vertices[buffer.triangles[t + 1]]));
+                var p2 = b.Position + b.Quaternion * (b.GridSize * mesh.ResizePoint(b.Scale, buffer.vertices[buffer.triangles[t + 2]]));
+                // Faces turned the screen's way set the picture's size; the tapered sides around them (steep, but not
+                // turned away) are lit too, as the game's holo face is, so the screen has its edges and not a flat cut.
+                var facing = Vector3.Dot(Vector3.Cross(p1 - p0, p2 - p0).normalized, normal);
+                if (facing < -0.2f) continue;
+                var tri = new[] { p0, p1, p2 };
+                var part = true;
+                foreach (var p in tri)
+                {
+                    var w = p - c00;
+                    var out_ = Vector3.Dot(w, normal);
+                    float a = Vector3.Dot(w, u) / u.sqrMagnitude, bb = Vector3.Dot(w, v) / v.sqrMagnitude;
+                    // Close behind the square and just around it: a stray face far off to the side isn't part of it.
+                    if (out_ < -depth || out_ > depth || a < -0.25f || a > 1.25f || bb < -0.25f || bb > 1.25f) { part = false; break; }
+                }
+                if (!part) continue;
+                face.AddRange(tri);
+                if (facing < 0.3f) continue;
+                foreach (var p in tri)
+                {
+                    var w = p - c00;
+                    float a = Vector3.Dot(w, u) / u.sqrMagnitude, bb = Vector3.Dot(w, v) / v.sqrMagnitude;
+                    a0 = Mathf.Min(a0, a); a1 = Mathf.Max(a1, a); b0 = Mathf.Min(b0, bb); b1 = Mathf.Max(b1, bb);
+                }
             }
-            d.Dirty = true;
+            var o = c00;
+            c00 = o + u * a0 + v * b0;
+            c10 = o + u * a1 + v * b0;
+            c01 = o + u * a0 + v * b1;
+            c11 = o + u * a1 + v * b1;
+            return face;
+        }
+
+        // Rebuilds every display's glass (after changing FillFace or Bulge from DevBridge).
+        public static string Rebuild()
+        {
+            foreach (var d in displays.Values) d.Shape = 0;
+            return $"rebuilding {displays.Count} display(s), fill face {FillFace}";
         }
 
         static void BuildExternal(Display d)
@@ -360,7 +572,10 @@ namespace EvoCore
             float ss = d.Draw.width / Mathf.Max(1f, d.Width);
             var cb = new CommandBuffer { name = "Lua display" };
             cb.SetRenderTarget(d.Draw);
-            cb.ClearRenderTarget(false, true, d.External ? Color.clear : new Color(0.01f, 0.014f, 0.012f, 1f));
+            // A monitor's own background: its paint, lit like the game's holo screens (Backdrop below 1 lets the
+            // monitor's own icon show through). Anything the script draws over it is solid.
+            var backdrop = d.External ? Color.clear : BackdropOf(d);
+            cb.ClearRenderTarget(false, true, backdrop);
             cb.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.Ortho(0f, d.Draw.width, d.Draw.height, 0f, -1f, 1f));
             int pooled = 0;
             // Runs of shapes share one mesh; each text is its own (its font's texture).
@@ -396,6 +611,15 @@ namespace EvoCore
                     }
                 }
             }
+            // The button under the player's cursor, lit.
+            foreach (var (name, r) in d.Buttons)
+            {
+                if (name != d.Hovered) continue;
+                var s = verts.Count;
+                foreach (var p in new[] { new Vector2(r.xMin, r.yMin), new Vector2(r.xMax, r.yMin), new Vector2(r.xMax, r.yMax), new Vector2(r.xMin, r.yMax) })
+                { verts.Add(p * ss); cols.Add(new Color(1f, 1f, 1f, 0.18f)); uvs.Add(new Vector2(0.5f, 0.5f)); }
+                tris.AddRange(new[] { s, s + 1, s + 2, s, s + 2, s + 3 });
+            }
             Flush();
 
             if (d.External)
@@ -408,7 +632,7 @@ namespace EvoCore
             // CRT: the picture on a pinched grid (corners pulled in most, so the edges bow out), scanlines, vignette.
             float W = d.Shown.width, H = d.Shown.height;
             cb.SetRenderTarget(d.Shown);
-            cb.ClearRenderTarget(false, true, Color.black);
+            cb.ClearRenderTarget(false, true, Color.clear);
             cb.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.Ortho(0f, W, H, 0f, -1f, 1f));
             if (d.Picture == null) d.Picture = new Material(solid) { name = "Lua display picture" };
             d.Picture.mainTexture = d.Draw;
@@ -428,6 +652,13 @@ namespace EvoCore
 
         // The game renders in linear colour, and mesh colours aren't converted, so script colours (as seen on screen)
         // are turned linear first; without this they came out washed out.
+        static Color BackdropOf(Display d)
+        {
+            var shade = Lin(Color.Lerp(d.Tint, Color.white, BackdropLift));
+            shade.a = d.Backdrop >= 0f ? d.Backdrop : Backdrop;
+            return shade;
+        }
+
         static Color Lin(Color c) => QualitySettings.activeColorSpace == ColorSpace.Linear ? c.linear : c;
 
         static void Quad(Mesh m, float w, float h, Vector2 tiles)
@@ -509,6 +740,43 @@ namespace EvoCore
 
         public static string Report() => displays.Count == 0 ? "No Lua displays." : string.Join("\n", displays.Values.Select(d =>
             $"{d.Block.brickData.Brick.name}{(d.External ? " (surface)" : "")} on {d.Block.brickCoord.entity?.Parent?.EntityName}: {d.Width}x{d.Height}, {d.Cmds.Count} drawings, crt {d.Crt}, texture {(d.External ? d.Draw : d.Shown)?.width}x{(d.External ? d.Draw : d.Shown)?.height}").ToArray());
+
+        // The first display's monitor mesh, slot by slot, in the picture square's own frame: across (u) and up (v) from
+        // its C00 corner as shares of its sides, and out along its normal (block units), to see where the face is.
+        public static string MeshReport() => MeshReport(null);
+
+        // ...or the one on that ship (by name).
+        public static string MeshReport(string ship)
+        {
+            var d = displays.Values.FirstOrDefault(x => !x.External && x.Go != null && (ship == null || x.Block.brickCoord.entity?.Parent?.EntityName == ship));
+            if (d == null) return "no monitor display";
+            var b = d.Block.brickCoord.brickData;
+            var mesh = b.Brick.VoxelMesh;
+            var buffer = mesh.meshBuffer;
+            Vector3 u = d.C10 - d.C00, v = d.C01 - d.C00;
+            var sb = new System.Text.StringBuilder($"{b.Brick.name}: holo slot {ScreenSlot(b.Brick)}, square {u.magnitude:0.000} x {v.magnitude:0.000}\n");
+            // The glass itself, in the same frame.
+            var gl = d.Glass.vertices.Select(q => { var w = q - d.C00; return new Vector3(Vector3.Dot(w, u) / u.sqrMagnitude, Vector3.Dot(w, v) / v.sqrMagnitude, Vector3.Dot(w, d.Normal)); }).ToList();
+            if (gl.Count > 0)
+                sb.AppendLine($"glass ({(d.Domed ? "domed square" : "face")}): {gl.Count} verts, u {gl.Min(p => p.x):0.000}..{gl.Max(p => p.x):0.000}, v {gl.Min(p => p.y):0.000}..{gl.Max(p => p.y):0.000}, out {gl.Min(p => p.z):0.0000}..{gl.Max(p => p.z):0.0000}");
+            var bySlot = new SortedDictionary<int, List<Vector3>>();
+            for (int t = 0; t + 2 < buffer.triangles.Count; t += 3)
+            {
+                var i0 = buffer.triangles[t]; var i1 = buffer.triangles[t + 1]; var i2 = buffer.triangles[t + 2];
+                var slot = Mathf.FloorToInt((buffer.uv[i0].x + buffer.uv[i1].x + buffer.uv[i2].x) / 3f);
+                var p = new[] { i0, i1, i2 }.Select(i => b.Position + b.Quaternion * (b.GridSize * mesh.ResizePoint(b.Scale, buffer.vertices[i]))).ToArray();
+                // Only faces turned the screen's way.
+                if (Vector3.Dot(Vector3.Cross(p[1] - p[0], p[2] - p[0]).normalized, d.Normal) < 0.3f) continue;
+                if (!bySlot.TryGetValue(slot, out var list)) bySlot[slot] = list = new List<Vector3>();
+                foreach (var q in p) { var w = q - d.C00; list.Add(new Vector3(Vector3.Dot(w, u) / u.sqrMagnitude, Vector3.Dot(w, v) / v.sqrMagnitude, Vector3.Dot(w, d.Normal))); }
+            }
+            foreach (var pair in bySlot)
+            {
+                var l = pair.Value;
+                sb.AppendLine($"slot {pair.Key}: {l.Count / 3} tris, u {l.Min(p => p.x):0.000}..{l.Max(p => p.x):0.000}, v {l.Min(p => p.y):0.000}..{l.Max(p => p.y):0.000}, out {l.Min(p => p.z):0.0000}..{l.Max(p => p.z):0.0000}");
+            }
+            return sb.ToString();
+        }
 
         // Testing without the link tool: links the Lua Computer nearest the player to the nearest monitor.
         public static string LinkNearest()
@@ -612,12 +880,39 @@ namespace EvoCore
         // Brightness of the glass: about 1 plain, higher glows (bloom). Monitors.Glow until set.
         public double glow { get => D == null ? 0 : D.Glow >= 0f ? D.Glow : Monitors.Glow; set { var d = D; if (d != null) d.Glow = Mathf.Clamp((float)value, 0f, 4f); } }
 
+        // The monitor's paint as "#rrggbb", to draw in its colour.
+        public string tint => D == null ? "#ffffff" : "#" + ColorUtility.ToHtmlStringRGB(D.Tint);
+        // How solid the background is where nothing is drawn: 0 see-through to the monitor, 1 solid.
+        public double backdrop { get => D == null ? 0 : D.Backdrop >= 0f ? D.Backdrop : Monitors.Backdrop; set { var d = D; if (d != null) { d.Backdrop = Mathf.Clamp01((float)value); d.Dirty = true; } } }
+
         public void clear(object color = null)
         {
             var d = D; if (d == null) return;
             d.Cmds.Clear();
+            d.Buttons.Clear();
             if (color != null) Add(d, new Monitors.Cmd { Kind = 0, Color = Col(color, Color.black), Points = Rect(0, 0, d.Width, d.Height) });
             d.Dirty = true;
+        }
+
+        // A touch button: drawn as a framed box with a centred label, lit while the player aims at it; touching it
+        // passes its name to on_touch (the fifth value). Buttons last until clear().
+        public void button(string name, double x, double y, double w, double h, object label = null, object color = null)
+        {
+            var d = D; if (d == null || string.IsNullOrEmpty(name)) return;
+            var c = Col(color, Col("green"));
+            rect(x, y, w, h, new Color(c.r * 0.18f, c.g * 0.18f, c.b * 0.18f, 1f));
+            box(x, y, w, h, c, 1.5);
+            var size = Math.Min(18.0, h * 0.55);
+            text(x + w / 2, y + (h - size) / 2 - 1, label ?? name, c, size, "center");
+            d.Buttons.RemoveAll(b => b.name == name);
+            d.Buttons.Add((name, new Rect((float)x, (float)y, (float)w, (float)h)));
+        }
+
+        // Where the player aims on this display (canvas units), or nil when they aren't.
+        public DynValue hover()
+        {
+            var at = Lua.HoverOn(D);
+            return at == null ? DynValue.Nil : DynValue.NewTuple(DynValue.NewNumber(at.Value.x), DynValue.NewNumber(at.Value.y));
         }
 
         public void rect(double x, double y, double w, double h, object color = null)
@@ -748,6 +1043,7 @@ namespace EvoCore
             switch (c)
             {
                 case null: return def;
+                case Color given: return given;   // from C# helpers like button()
                 case double n:
                     var v = (int)n;
                     return new Color32((byte)(v >> 16), (byte)(v >> 8), (byte)v, 255);

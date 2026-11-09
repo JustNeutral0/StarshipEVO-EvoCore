@@ -95,6 +95,7 @@ namespace EvoCore
             internal static void ShowGraph() => tab = Tab.Graph;
             internal static void ShowAnim() => tab = Tab.Anim;
             internal static void ShowLinks() => tab = Tab.Links;
+            internal static void Say(string text) => message = text;   // a line under the canvas
 
             static Rect screen;
             const float TitleH = 46;
@@ -311,6 +312,19 @@ namespace EvoCore
                         if (launch && Same(path, file)) Show();
                     }
                 }
+                // Lua scripts too, so a computer can be given one from here: a pick opens it on the Scripts tab, where
+                // "Put on computer" is.
+                if (!launch)
+                {
+                    GUILayout.Space(8);
+                    GUILayout.Label("Lua scripts");
+                    foreach (var path in Lua.LuaFiles())
+                    {
+                        var runs = Lua.StatusOf(path).Count;
+                        if (GUILayout.Button(Path.GetFileNameWithoutExtension(path) + ".lua" + (runs > 0 ? $"  ({runs} running)" : ""), GUI.skin.label))
+                            Lua.OpenPath(path);
+                    }
+                }
                 GUILayout.EndScrollView();
                 GUILayout.EndVertical();
             }
@@ -460,7 +474,7 @@ namespace EvoCore
 
                 // A selected lua node's code opens under the canvas.
                 Node coding = null;
-                if (picked.Count <= 1 && selected >= 0 && graph.Nodes.TryGetValue(selected, out var maybe) && maybe.Type.InsOf != null) coding = maybe;
+                if (picked.Count <= 1 && selected >= 0 && graph.Nodes.TryGetValue(selected, out var maybe) && maybe.Type.Name == "lua" && maybe.Type.Source == null) coding = maybe;
                 DropDeadWires();
 
                 // As wide as the screen allows, and as tall as leaves room for the lines under it.
@@ -1317,7 +1331,7 @@ namespace EvoCore
                 var at = (menuAt - pan) / zoom;
                 var node = new Node { Id = id, Type = type, X = Mathf.Round(at.x / 10) * 10, Y = Mathf.Round(at.y / 10) * 10, Placed = true };
                 foreach (var s in type.Settings.Where(s => s.Value == "")) node.Settings[s.Key] = "";   // required: typed in the node
-                if (type.InsOf != null) node.Script = LuaNodeExample;
+                if (type.Name == "lua" && type.Source == null) node.Script = LuaNodeExample;
                 graph.Nodes[id] = node;
                 selected = id;
                 picked.Clear();

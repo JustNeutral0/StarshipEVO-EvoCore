@@ -286,6 +286,46 @@ end
             var isGraph = c.ProgramKind == "graph";
             if (GUILayout.Button((SamePath(path, openFile) ? "> " : "") + "This computer" + (isGraph ? " (graph)" : " (Lua)"), GUI.skin.label))
                 OpenPath(Mirror(c));
+            // The ship's logic tools (work in progress), folded away so they don't crowd the file list; an undoable refit
+            // keeps them open so its undo stays in sight.
+            var ship = c.brickCoord.entity.Parent;
+            if (graphTab && !LogicRefit.CanUndo(ship))
+                showShipLogic = GUILayout.Toggle(showShipLogic, (showShipLogic ? "v " : "> ") + "Ship logic (WIP)", GUI.skin.label);
+            if (!graphTab || (!showShipLogic && !LogicRefit.CanUndo(ship))) confirmRefit = false;
+            // The ship's logic gates and timers as a graph (LogicConverter): read only, the ship stays as it is.
+            else if (GUILayout.Button("Convert ship's logic", GUILayout.Width(150)))
+            {
+                var report = LogicConverter.ConvertAndSave(ship, out var made);
+                if (made != null) OpenPath(made);
+                Graphs.Canvas.Say(report.Replace("\r", "").Replace("\n", "  "));
+            }
+            // Step 2: the converted logic onto this computer (LogicRefit), asked first; and its undo.
+            if (graphTab && LogicRefit.CanUndo(ship))
+            {
+                if (GUILayout.Button("Undo refit", GUILayout.Width(150)))
+                    Graphs.Canvas.Say(LogicRefit.Undo(ship).Replace("\r", "").Replace("\n", "  "));
+            }
+            else if (graphTab && showShipLogic)
+            {
+                if (!confirmRefit)
+                {
+                    if (GUILayout.Button("Refit onto this computer", GUILayout.Width(150))) confirmRefit = true;
+                }
+                else
+                {
+                    GUILayout.Label("Run the ship's gates and timers as a graph here? It tests first: if every output matches, the old ones are removed (no undo); if not, they stay and Undo works.", GUILayout.Width(160));
+                    GUILayout.BeginHorizontal(GUILayout.Width(160));
+                    if (GUILayout.Button("Yes", GUILayout.Width(70)))
+                    {
+                        confirmRefit = false;
+                        var done = LogicRefit.Refit(c);
+                        OpenPath(Mirror(c));
+                        Graphs.Canvas.Say(done.Replace("\r", "").Replace("\n", "  "));
+                    }
+                    if (GUILayout.Button("No", GUILayout.Width(70))) confirmRefit = false;
+                    GUILayout.EndHorizontal();
+                }
+            }
             if (graphTab && isGraph && wrapped.TryGetValue(c, out var before))
             {
                 if (GUILayout.Button("Back to Lua", GUILayout.Width(150)))
@@ -321,7 +361,7 @@ end
             GUILayout.EndHorizontal();
         }
 
-        static bool confirmGraph;
+        static bool confirmGraph, confirmRefit, showShipLogic;
         static readonly Dictionary<LuaComputer, string> wrapped = new Dictionary<LuaComputer, string>();
 
         // The graph that runs a computer's Lua unchanged: input nodes, one lua node holding the code, output nodes.

@@ -62,8 +62,10 @@ namespace EvoCore
 
         // evoprog3\n<id>\n<kind>\n<program length, -1 for none>\n<anims length>\n<program><anims><ports>.
         // (evoprog2 had no ports and no anims length; evoprog1 no anims and no length.)
+        // Once a computer has had a program it always writes its data, even "none" (length -1): with nothing written,
+        // the game would keep the last data it had and load it back (an undone refit came back that way).
         public override byte[] GetCustomData(bool isBlueprintExport) =>
-            Program == null && Anims == null && PortMap == null ? null :
+            Program == null && Anims == null && PortMap == null && ProgramId == null ? null :
             Encoding.UTF8.GetBytes($"evoprog3\n{ProgramId}\n{ProgramKind}\n{(Program == null ? -1 : Program.Length)}\n{(Anims ?? "").Length}\n{Program}{Anims}{PortMap}");
 
         public override void OnSaveLoaded(byte[] customData, bool onInit)
@@ -150,8 +152,13 @@ namespace EvoCore
         public static void Send(ICommand target, float value)
         {
             var player = Dependency.RenderPipeline != null ? Dependency.RenderPipeline.commandManager : null;
-            target.Activate(manualActivation: false, player, value);
+            target.Activate(manualActivation: false, player, Signal(value));
         }
+
+        // A link carries 0 to 1, as vanilla links do. Systems multiply their output by their state unchecked (a
+        // thruster sent 3 pushed 3x, a reactor would make 3x power). Tiered parts raise the rated stats instead, so
+        // they are untouched by this.
+        internal static float Signal(float value) => float.IsNaN(value) ? 0f : Mathf.Clamp01(value);
     }
 
     static class LuaComputerBlock

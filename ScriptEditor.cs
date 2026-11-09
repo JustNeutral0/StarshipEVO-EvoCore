@@ -37,6 +37,8 @@ namespace EvoCore
             Editor.Draw();
         }
 
+        internal static IEnumerable<string> LuaFiles() => Editor.Scripts();
+
         static class Editor
         {
             static string file;             // full path of the open script, or null
@@ -216,7 +218,7 @@ namespace EvoCore
                 return editor != null;
             }
 
-            static IEnumerable<string> Scripts()
+            internal static IEnumerable<string> Scripts()
             {
                 try { return Directory.GetFiles(ScriptsDir, "*.lua").OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList(); }
                 catch { return Enumerable.Empty<string>(); }

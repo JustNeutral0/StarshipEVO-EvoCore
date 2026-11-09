@@ -244,6 +244,7 @@ namespace EvoCore
                 "function on_message(port, msg)", "runs for each message another computer sends on a two-way channel (see ports)",
                 "function on_key(key, down)", "runs when a key goes down or up (see keys)",
                 "function on_button(stick, button, down)", "runs when a joystick button goes down or up (see joystick)",
+                "function on_touch(x, y, screen, down, button)", "runs when you aim at one of its monitors and press the use key (F here): where on the canvas, which display, key down or up, and the display.button there (or nil)",
                 "print(...)", "shows a line in the Scripts tab",
                 "time()", "seconds since the game started");
             Global("ship", "The script's own ship, read only. Levels are 0 to 1.",
@@ -267,7 +268,7 @@ namespace EvoCore
                 "name / kind / type", "its Tag label, the kind of block, its game type",
                 "state", "its value, 0 to 1",
                 "on", "read or set: is it on",
-                "set(value)", "sets it (a number or true/false)",
+                "set(value)", "sets it (a number from 0 to 1, or true/false)",
                 "toggle()", "flips it",
                 "read(name)", "one of its readouts (a thruster's thrust, a tank's level...)",
                 "values()", "every readout it has, as a table");
@@ -280,7 +281,7 @@ namespace EvoCore
                 "block(i)", "the linked block (see block)");
             Global("outputs", "A Lua Computer's outputs. i is a port name or a number, as for inputs.",
                 "count / get(i) / on(i) / name(i) / block(i)", "as for inputs",
-                "set(i, value)", "sends a value (a number or true/false) to that block",
+                "set(i, value)", "sends a value (a number from 0 to 1, or true/false) to that block",
                 "all(value)", "sends it down every link");
             Global("keys", "The keyboard and mouse buttons. While a menu is open (the game's, this screen, the link picker) " +
                            "every key reads as up and no events fire, so typing doesn't fly the ship.",
@@ -322,8 +323,9 @@ namespace EvoCore
                               "Drawing stays until clear(): clear first in tick to animate.",
                 "present / surface", "is it there, and is it a see-through display surface",
                 "width / height", "the canvas size",
-                "crt / glow", "the CRT look on or off, and the glass brightness (about 1 plain, higher glows)",
-                "clear([color])", "wipes it (black, or see-through on a surface)",
+                "crt / glow", "the CRT look (scanlines, bent edges; off unless set), and the glass brightness (about 1 plain, higher glows)",
+                "tint / backdrop", "the monitor's paint as \"#rrggbb\", and how solid its background is (0 see-through to 1 solid)",
+                "clear([color])", "wipes it: with no colour, back to the monitor's tinted see-through background (see-through on a surface)",
                 "rect(x, y, w, h, color)", "a filled box",
                 "box(x, y, w, h, color, thickness)", "an outline",
                 "line(x1, y1, x2, y2, color, thickness)", "a line",
@@ -333,7 +335,9 @@ namespace EvoCore
                 "tri(x1, y1, x2, y2, x3, y3, color)", "a filled triangle",
                 "bar(x, y, w, h, fill, color, back)", "a level bar, fill 0 to 1",
                 "text(x, y, s, color, size, align, font)", "text with its top at y; align left, center or right; font code, display or text",
-                "measure(s, size, font)", "how wide a text would be");
+                "measure(s, size, font)", "how wide a text would be",
+                "button(name, x, y, w, h, label, color)", "a touch button: lit while aimed at; touching it passes its name to on_touch",
+                "hover()", "x, y where the player aims on this monitor, or nil (only while the script has on_touch)");
             Global("displays", "The computer's displays: by display port name, or by number (the declared display ports once there are any, else link order).",
                 "count", "how many",
                 "get(i)", "a display port's name, or a number (see display)");

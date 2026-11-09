@@ -182,6 +182,8 @@ end
                 catch (Exception e) { Core.Log.Error("Lua scan failed: " + e); }
             }
             ScanControls();
+            try { ScanTouch(); } catch (Exception e) { Core.Log.Error("Touch: " + e); }
+            LogicRefit.Update();
             foreach (var r in running.Values.ToArray())
             {
                 if (r.Script == null) continue;
@@ -513,7 +515,8 @@ end
                 return target != null ? new BlockApi(new Found { Snapshot = target }) : null;
             }
 
-            // Outputs only: send a value (a number, or true/false for 1/0) down one link or port, or down all links.
+            // Outputs only: send a value (a number from 0 to 1, or true/false for 1/0) down one link or port, or down
+            // all links. Numbers outside 0-1 are clamped.
             public void set(DynValue i, object value)
             {
                 var target = Resolve(computer, outgoing, i, out _);
@@ -534,8 +537,9 @@ end
                 }
             }
 
-            internal static float ToState(object value) =>
-                value is bool b ? (b ? 1f : 0f) : value is double d ? (float)d : value is float f ? f : value is int n ? n : 0f;
+            // Clamped here as well as in Send, so the value the editor shows as sent is the one that arrived.
+            internal static float ToState(object value) => LuaComputer.Signal(
+                value is bool b ? (b ? 1f : 0f) : value is double d ? (float)d : value is float f ? f : value is int n ? n : 0f);
         }
 
         // ---- Status, for the Scripts tab and DevBridge (get EvoCore.Lua.Report()) ----
@@ -574,6 +578,16 @@ end
 
         // Whether a host's script is loaded and not stopped by an error.
         internal static bool Runs(Command host) => running.TryGetValue(host, out var r) && r.Script != null;
+
+        // A running graph's wire value ("node.port" in its V table), or null (LogicRefit's self-test reads these).
+        internal static double? GraphValue(Command host, string wire)
+        {
+            if (!running.TryGetValue(host, out var r) || r.Script == null) return null;
+            var v = r.Script.Globals.Get("V");
+            if (v.Type != DataType.Table) return null;
+            var x = v.Table.Get(wire);
+            return x.Type == DataType.Number ? x.Number : (double?)null;
+        }
 
         // For the graph canvas's live view: every wire's value ("node.port" -> value) in the first running copy of a
         // graph, read from the global V its compiled script keeps; null when nothing runs it. `from` says which copy.

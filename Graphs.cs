@@ -154,6 +154,36 @@ namespace EvoCore
             Types["multiply"].InDefaults["b"] = 1;
             Types["divide"].InDefaults["b"] = 1;
 
+            // The game's own logic blocks, exactly (LogicConverter.cs turns a ship's logic into these).
+            Add("gate", "the game's logic gate with any number of inputs: op OR (the highest), AND (the lowest), XOR, NOR, NAND, XNOR " +
+                        "(1 minus OR / AND / XOR), or LATEST (whichever input changed last, as a block fed by several links)",
+                None, GateCode, "op=OR", "inputs=2");
+            Types["gate"].InsOf = n => LuaPorts(n, "inputs", "in");
+            Add("delay", "the game's timer gate: mode none passes each change of `in` on after `seconds`; mode repeat sends a one-tick " +
+                         "pulse every `seconds` while `in` is on; mode toggle flips on and off every `seconds` while `in` is on", In1,
+                e =>
+                {
+                    string i = e.In("in"), st = e.State, o = e.Out("out"), secs = $"math.max(0.1, {e.Num("seconds")})";
+                    switch (e.Setting("mode"))
+                    {
+                        case "none":
+                            return $"do local q = {st}.q or {{}}; {st}.q = q; {st}.t = ({st}.t or 0) + dt; " +
+                                   $"if {st}.last ~= {i} then {st}.last = {i}; q[#q + 1] = {{ {st}.t + {secs}, {i} }} end; " +
+                                   $"while q[1] and q[1][1] <= {st}.t do {o} = q[1][2]; table.remove(q, 1) end end";
+                        case "repeat":
+                            // Timed from the tick it turned on, as the game times from activation.
+                            return $"if b({i}) then if {st}.on then {st}.t = {st}.t + dt else {st}.on = true; {st}.t = 0 end; " +
+                                   $"if {st}.t >= {secs} then {st}.t = {st}.t - {secs}; {o} = 1 else {o} = 0 end " +
+                                   $"else {st}.on = false; {o} = 0 end";
+                        case "toggle":
+                            return $"if b({i}) then if {st}.on then {st}.t = {st}.t + dt else {st}.on = true; {st}.t = 0; {st}.p = 1 end; " +
+                                   $"if {st}.t >= {secs} then {st}.t = {st}.t - {secs}; {o} = {st}.p; {st}.p = 1 - {st}.p end " +
+                                   $"else {st}.on = false end";
+                        default: throw new GraphException($"line {e.Node.Line}: node {e.Node.Id} delay mode={e.Setting("mode")}; use none, repeat or toggle");
+                    }
+                }, "mode=none", "seconds=1");
+            Types["delay"].Category = "Logic";
+
             category = "Time and memory";
             Add("timer", "mode=on: on once `in` has been on for `seconds`; mode=off: stays on for `seconds` after `in` goes off", In1, e =>
             {
@@ -254,8 +284,41 @@ namespace EvoCore
             Doc("port out", "port", "the output port's name", "in", "the value to send to the block in that port");
             Doc("send", "port", "the channel's name", "in", "the number to send to the other computer");
             Doc("receive", "port", "the channel's name", "out", "the last number the other computer sent, 0 before any");
+            Doc("gate", "op", "OR, AND, XOR, NOR, NAND, XNOR or LATEST", "inputs", "how many inputs (in1, in2...; up to 16)", "out", "the result, 0 to 1 like the game's gates");
+            Doc("delay", "in", "the signal", "mode", "none, repeat or toggle (the game's timer gate modes)", "seconds", "the delay or repeat time (at least 0.1)", "out", "the delayed signal, the pulses, or the blinking");
             Doc("lua", "inputs", "how many inputs (in1, in2...; up to 16); the code reads in1 as inputs.get(1)",
                 "outputs", "how many outputs (out1, out2...); the code sets out1 with outputs.set(1, value)");
+        }
+
+        // The game's gate maths (CommandLogic): OR the highest input, AND the lowest (0 with none), XOR folded as
+        // max(min(x, 1 - v), min(1 - x, v)); NOR, NAND, XNOR are 1 minus those. LATEST passes on the input that changed
+        // last, as a block fed by several links takes whichever signal reached it last.
+        static string GateCode(Emit e)
+        {
+            var ins = e.Node.Ins.Select(e.In).ToArray();
+            var o = e.Out("out");
+            var op = e.Setting("op").ToUpperInvariant();
+            if (ins.Length == 0) return $"{o} = {(op == "NOR" || op == "NAND" || op == "XNOR" ? "1" : "0")}";
+            string fold;
+            switch (op)
+            {
+                case "OR": case "NOR": fold = $"math.max({string.Join(", ", ins)})"; break;
+                case "AND": case "NAND": fold = $"math.min({string.Join(", ", ins)})"; break;
+                case "XOR": case "XNOR":
+                    fold = "0";
+                    foreach (var v in ins) fold = $"math.max(math.min({fold}, 1 - {v}), math.min(1 - {fold}, {v}))";
+                    break;
+                case "LATEST":
+                {
+                    var st = e.State;
+                    var sb = new StringBuilder($"do local l = {st}.l or {{}}; {st}.l = l; ");
+                    for (int k = 0; k < ins.Length; k++)
+                        sb.Append($"if l[{k + 1}] ~= {ins[k]} then l[{k + 1}] = {ins[k]}; {st}.v = {ins[k]} end; ");
+                    return sb.Append($"{o} = {st}.v or 0 end").ToString();
+                }
+                default: throw new GraphException($"line {e.Node.Line}: node {e.Node.Id} gate op={op}; use OR, AND, XOR, NOR, NAND, XNOR or LATEST");
+            }
+            return op == "NOR" || op == "NAND" || op == "XNOR" ? $"{o} = 1 - {fold}" : $"{o} = {fold}";
         }
 
         // ---- The lua node: a script inside the graph ----
@@ -387,8 +450,8 @@ end";
                             if (eq <= 0) throw new GraphException($"line {lineNo}: \"{w}\" should be setting=value");
                             var key = w.Substring(0, eq).ToLowerInvariant();
                             // The lua node's port counts were ins= and outs= in 0.9.48.
-                            if (type.InsOf != null && key == "ins") key = "inputs";
-                            if (type.OutsOf != null && key == "outs") key = "outputs";
+                            if (type.Name == "lua" && key == "ins") key = "inputs";
+                            if (type.Name == "lua" && key == "outs") key = "outputs";
                             if (key == "at")
                             {
                                 var xy = w.Substring(eq + 1).Split(',');
@@ -518,7 +581,7 @@ end";
             lua.AppendLine("local function n(c) if c then return 1 end return 0 end  -- on/off as 1/0");
             // Lua-written nodes this graph uses: each file's code once, called by every node of that type.
             var custom = g.Nodes.Values.Select(x => x.Type).Where(t => t.Source != null).Distinct().ToList();
-            var scripts = g.Nodes.Values.Where(x => x.Type.InsOf != null && x.Type.Source == null).ToList();
+            var scripts = g.Nodes.Values.Where(x => x.Type.Name == "lua" && x.Type.Source == null).ToList();
             foreach (var x in scripts) CheckLuaNode(x);
             lua.AppendLine("local function num(x) if x == true then return 1 elseif not x then return 0 end return tonumber(x) or 0 end");
             string Names(params string[] types) => string.Join(", ", g.Nodes.Values.Where(x => types.Contains(x.Type.Name))

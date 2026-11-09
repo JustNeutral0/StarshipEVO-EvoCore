@@ -398,6 +398,52 @@ namespace EvoCore
         // kept where they are (Keel's legacy-extension rules, docs/KEEL-MATERIAL-COMPATIBILITY.md in Starship-Keel), and
         // our rows are pointed at the layers the slices actually got: a mod that appends layers after our rows were made
         // (Keel attachment palettes, Tractor Beam) moves them, which once showed the Lua Computer someone else's texture.
+        // Test for the layer fix (StarshipEVO-EvoCore issue #1): with UserData\EvoCore\test-extra-layers present, a
+        // stand-in for another mod appends 3 magenta layers to both arrays after EvoCore's rows are made and before its
+        // slices go in (Harmony runs this postfix before AddSlices'). CheckLayers() then reads what the rows point at.
+        static readonly Color32 TestMagenta = new Color32(255, 0, 255, 255);
+        static int testLayersAdded;
+
+        [HarmonyPatch(typeof(Brick), nameof(Brick.LoadAllResourcesRuntime))]
+        static class TestExtraLayers
+        {
+            [HarmonyPriority(Priority.First)]
+            static void Postfix()
+            {
+                try
+                {
+                    if (!File.Exists(Path.Combine(Paths.UserData, "EvoCore", "test-extra-layers"))) return;
+                    var add = Enumerable.Range(0, 3).Select(_ => (Action<Texture2DArray, int>)((a, e) => Fill(a, e, TestMagenta))).ToList();
+                    var diffuse = Grow(ResourcesLoader.VOXEL_DIFFUSE, add);
+                    var specular = Grow(Shader.GetGlobalTexture("SPECULAR_TEX") as Texture2DArray, add);
+                    ResourcesLoader.VOXEL_DIFFUSE = diffuse;
+                    Shader.SetGlobalTexture("MAIN_TEX", diffuse);
+                    Shader.SetGlobalTexture("SPECULAR_TEX", specular);
+                    testLayersAdded = 3;
+                    Core.Log.Warning("Looks: TEST added 3 magenta layers before EvoCore's slices (test-extra-layers is present)");
+                }
+                catch (Exception e) { Core.Log.Error("Looks: test layers failed: " + e); }
+            }
+        }
+
+        // For DevBridge: each surface's row, the layer it points at, and whether that layer is the stand-in's magenta.
+        public static string CheckLayers()
+        {
+            if (Diffuse == null) return "no surfaces";
+            var table = VoxelMaterialResources.materialParamDatas;
+            return $"test layers added: {testLayersAdded}; diffuse array {Diffuse.depth}\n" + string.Join("\n", Surfaces.Select(s =>
+            {
+                var row = table[s.Row];
+                var brickRow = s.Brick?.VoxelMaterials?.FirstOrDefault(m => m.Id == s.Row);
+                var mip = Diffuse.mipmapCount - 1;
+                var pixel = Diffuse.GetPixels32(row.TextureID, mip)[0];
+                var before = row.TextureID > 0 ? Diffuse.GetPixels32(row.TextureID - 1, mip)[0] : default;
+                bool Magenta(Color32 c) => c.r > 240 && c.g < 16 && c.b > 240;
+                return $"{s.Key}/{s.Name}: row {s.Row} -> layer {row.TextureID} (block's copy {brickRow?.TextureID}), " +
+                       $"that layer is {(Magenta(pixel) ? "MAGENTA (wrong)" : "ours")}, the one before is {(Magenta(before) ? "magenta" : "not magenta")}";
+            }).ToArray());
+        }
+
         [HarmonyPatch(typeof(Brick), nameof(Brick.LoadAllResourcesRuntime))]
         static class AddSlices
         {
