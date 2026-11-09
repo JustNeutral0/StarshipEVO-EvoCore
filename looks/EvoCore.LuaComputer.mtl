@@ -1,0 +1,23 @@
+# Lua Computer look. Kd = colour (linear, as Blender writes it), Ke = glow, map_Kd = a picture beside this file.
+# lua_holo is the see-through hologram square on top (lua_gate.py ... holo; name has "holo"), lua_logo the
+# opaque picture version (lua_gate.py ... texture) ; the others are for the disc version.
+newmtl lua_holo
+Kd 1 1 1
+map_Kd lua_logo_holo.png
+
+newmtl lua_logo
+Kd 1 1 1
+Ke 0.12 0.12 0.12
+map_Kd lua_logo.png
+
+newmtl lua_blue
+Kd 0 0 0.06
+Ke 0 0 0.05
+
+newmtl lua_white
+Kd 1 1 1
+Ke 0.35 0.35 0.35
+
+newmtl lua_back
+Kd 0.85 0.85 0.88
+Ke 0.12 0.12 0.13

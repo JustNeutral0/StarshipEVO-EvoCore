@@ -33,6 +33,10 @@ namespace EvoCore
         public static readonly List<string> Status = new List<string>();
         public static bool Hooked;
 
+        // Looks made on the player's machine from the game's own mesh instead of shipped as a file: given the stock
+        // mesh and brick, the OBJ text. Used when Folder has no <key>.obj; the result is saved there.
+        public static readonly Dictionary<string, Func<Mesh, Brick, string>> Generators = new Dictionary<string, Func<Mesh, Brick, string>>();
+
         public static void Register(int brickId, string key)
         {
             WriteStock();
@@ -103,6 +107,12 @@ namespace EvoCore
                 if (brick == null || stock == null || !registered.TryGetValue(brick.brickID, out var key)) return stock;
                 if (brick.brickID >= Brick.BRICK_INDEX.Length || Brick.BRICK_INDEX[brick.brickID] != brick) return stock;
                 var path = Path.Combine(Folder, key + ".obj");
+                if (!File.Exists(path) && Generators.TryGetValue(key, out var make))
+                {
+                    Directory.CreateDirectory(Folder);
+                    File.WriteAllText(path, make(stock, brick));
+                    Core.Log.Msg($"Looks: made {key}.obj from the game's own mesh");
+                }
                 if (!File.Exists(path)) { Note($"{key}: no {key}.obj, stock look"); return stock; }
                 var mesh = Load(path, stock.bounds, brick.VoxelMaterials?.Length ?? 0, out var info, out var names, out var mtllib);
                 if (names.Count > 0)
@@ -571,6 +581,17 @@ namespace EvoCore
             var brick = brickId >= 0 && brickId < Brick.BRICK_INDEX.Length ? Brick.BRICK_INDEX[brickId] : null;
             var mesh = brick?.VoxelMesh?.Mesh;
             if (mesh == null) return $"brick {brickId} has no mesh";
+            var text = ObjText(mesh, brick, brickId, out var info);
+            var dir = Path.Combine(Folder, "export");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, $"{brickId}_{Regex.Replace(brick.name ?? "brick", @"[^\w\-]+", "_")}.obj");
+            File.WriteAllText(file, text);
+            return $"{file}: {info}";
+        }
+
+        // A mesh as OBJ text: x mirrored into OBJ's handedness, one `usemtl slotN` group per material slot.
+        internal static string ObjText(Mesh mesh, Brick brick, int brickId, out string info)
+        {
             var v = mesh.vertices; var n = mesh.normals; var uv = mesh.uv; var tris = mesh.triangles;
             var sb = new StringBuilder();
             sb.AppendLine($"# Starship EVO brick {brickId} \"{brick.name}\", mesh {brick.nameMesh}, written by EvoCore.Looks");
@@ -607,11 +628,8 @@ namespace EvoCore
                     sb.AppendLine($"f {a}/{corner[0]}/{a} {c2}/{corner[2]}/{c2} {b}/{corner[1]}/{b}");
                 }
             }
-            var dir = Path.Combine(Folder, "export");
-            Directory.CreateDirectory(dir);
-            var file = Path.Combine(dir, $"{brickId}_{Regex.Replace(brick.name ?? "brick", @"[^\w\-]+", "_")}.obj");
-            File.WriteAllText(file, sb.ToString());
-            return $"{file}: {tris.Length / 3} triangles, {v.Length} vertices, slots {string.Join(",", bySlot.Keys)}, bounds {Show(mesh.bounds)}";
+            info = $"{tris.Length / 3} triangles, {v.Length} vertices, slots {string.Join(",", bySlot.Keys)}, bounds {Show(mesh.bounds)}";
+            return sb.ToString();
         }
     }
 }

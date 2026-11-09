@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using HarmonyLib;
 using Game;
@@ -156,6 +157,80 @@ namespace EvoCore
     static class LuaComputerBlock
     {
         public static readonly int BrickId = Ids.Claim(IdSpace.Brick, "EvoCore.LuaComputer", 500); // 500 since it first shipped; 507 is TieredParts' thruster
+        const string LookKey = "EvoCore.LuaComputer";
+
+        // The Lua Computer's look, made on the player's machine from the game's own Spaceship Computer mesh (so no game
+        // geometry ships with the mod): the stock frame (slot0) kept, its hologram symbol (slot1) replaced by one square
+        // showing the lua_holo picture from EvoCore.LuaComputer.mtl. (lua_gate.py's "holo" mode, which made the file
+        // this replaces.)
+        internal static string Gate(string stockObj)
+        {
+            var v = new List<string>(); var vt = new List<string>(); var vn = new List<string>();
+            var faces = new List<(string mat, string face)>();
+            var holo = new List<int>();
+            string mat = null;
+            foreach (var raw in stockObj.Split('\n'))
+            {
+                var line = raw.Trim();
+                var p = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (p.Length == 0) continue;
+                switch (p[0])
+                {
+                    case "v": v.Add(line); break;
+                    case "vt": vt.Add(line); break;
+                    case "vn": vn.Add(line); break;
+                    case "usemtl": mat = p.Length > 1 ? p[1] : null; break;
+                    case "f":
+                        if (mat == "slot0") faces.Add(("slot0", line));
+                        else if (mat == "slot1") { holo.Clear(); for (int i = 1; i < p.Length; i++) holo.Add(int.Parse(p[i].Split('/')[0])); }
+                        break;
+                }
+            }
+            float F(string x) => float.Parse(x, System.Globalization.CultureInfo.InvariantCulture);
+            string G(float x) => x.ToString("0.000000", System.Globalization.CultureInfo.InvariantCulture);
+            // The square covers the stock symbol, just under where the symbol sat.
+            var h = 0f;
+            foreach (var i in holo) { var q = v[i - 1].Split(' '); h = Math.Max(h, Math.Max(Math.Abs(F(q[1])), Math.Abs(F(q[3])))); }
+            const float y = 0.1407f - 0.0003f;
+            vn.Add("vn 0 1 0");
+            var up = vn.Count;
+            vt.Add("vt 0.5 0.5");
+            var first = v.Count + 1;
+            foreach (var (x, z) in new[] { (-h, -h), (-h, h), (h, h), (h, -h) }) v.Add($"v {G(x)} {G(y)} {G(z)}");
+            // The picture's u runs along -x and v along +z: Looks mirrors the OBJ's x into Unity.
+            var corner = vt.Count + 1;
+            vt.AddRange(new[] { "vt 1 0", "vt 1 1", "vt 0 1", "vt 0 0" });
+            faces.Add(("lua_holo", "f " + string.Join(" ", new[] { 0, 1, 2, 3 }.Select(k => $"{first + k}/{corner + k}/{up}").ToArray())));
+
+            var sb = new StringBuilder();
+            sb.Append("# Lua Computer look: the game's Spaceship Computer frame (slot0) with a Lua logo in place of its holo\n");
+            sb.Append("# symbol. Made by EvoCore from the game's own mesh on this machine; delete it to make it again.\n");
+            sb.Append("mtllib EvoCore.LuaComputer.mtl\n");
+            foreach (var line in v.Concat(vt).Concat(vn)) sb.Append(line).Append('\n');
+            string last = null;
+            foreach (var (m, face) in faces)
+            {
+                if (m != last) { sb.Append("usemtl ").Append(m).Append('\n'); last = m; }
+                sb.Append(face).Append('\n');
+            }
+            return sb.ToString();
+        }
+
+        // For DevBridge: makes the look from the Spaceship Computer's mesh as a load would, and compares it with the
+        // file in Looks (all but the comment lines).
+        public static string CheckGate()
+        {
+            var stock = Brick.BRICK_INDEX[TabLogic.SPACESHIP_COMPUTER.brickID];
+            var made = Gate(Looks.ObjText(stock.VoxelMesh.Mesh, stock, stock.brickID, out _));
+            var path = System.IO.Path.Combine(Looks.Folder, LookKey + ".obj");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(Looks.Folder, "export", "generated_" + LookKey + ".obj"), made);
+            if (!System.IO.File.Exists(path)) return "no file to compare with; generated one written to export";
+            string[] Lines(string t) => t.Replace("\r", "").Split('\n').Where(l => l.Length > 0 && !l.StartsWith("#")).ToArray();
+            var a = Lines(System.IO.File.ReadAllText(path));
+            var b = Lines(made);
+            var diff = Enumerable.Range(0, Math.Max(a.Length, b.Length)).Count(i => i >= a.Length || i >= b.Length || a[i] != b[i]);
+            return diff == 0 ? $"identical ({b.Length} lines)" : $"{diff} line(s) differ of {a.Length} vs {b.Length}";
+        }
 
         [HarmonyPatch(typeof(Brick), nameof(Brick.LoadAllResourcesRuntime))]
         static class Register
@@ -182,7 +257,8 @@ namespace EvoCore
                     brick.Desc("Runs a Lua script. Link buttons, switches and sensors into it, and link it to lights, doors and thrusters: " +
                                "the script reads its inputs and sets its outputs. Name it with the multitool's Tag mode; the label picks the script.")
                          .Tab(UI.Codex.CodexTab.COMMANDS);
-                    Looks.Register(BrickId, "EvoCore.LuaComputer"); // its own mesh, if Looks\EvoCore.LuaComputer.obj is there
+                    Looks.Register(BrickId, LookKey); // its own mesh: Looks\EvoCore.LuaComputer.obj, made from the stock one if missing
+                    Looks.Generators[LookKey] = (mesh, brick) => Gate(Looks.ObjText(mesh, brick, brick.brickID, out _));
                     Core.Log.Msg("Registered Lua Computer as brick " + BrickId);
                 }
                 catch (Exception e) { Core.Log.Error("Lua Computer registration failed: " + e); }
