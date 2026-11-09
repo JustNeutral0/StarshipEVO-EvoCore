@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using HarmonyLib;
+using MoonSharp.Interpreter;
 using UnityEngine;
 using UnityEngine.Rendering;
 using Manager;
@@ -78,11 +79,13 @@ namespace EvoCore
         // ---- Which monitors are whose ----
 
         // The i-th monitor (from 1) among a computer's outputs, made a display on first use.
-        internal static Display Get(LuaComputer computer, int index)
+        internal static Display Get(LuaComputer computer, int index) => Get(computer, DynValue.NewNumber(index));
+
+        // A display by number or display port name (Ports.cs), made a display on first use.
+        internal static Display Get(LuaComputer computer, DynValue which)
         {
-            var monitors = Linked(computer);
-            if (index < 1 || index > monitors.Count) return null;
-            var block = monitors[index - 1];
+            var block = Lua.DisplayBlock(computer, which, Linked(computer));
+            if (block == null) return null;
             var external = !(block is CommandDisplay);
             if (displays.TryGetValue(block, out var d) && d.Owner == computer && d.External == external) return d;
             if (d != null) Drop(block, d);
@@ -91,7 +94,14 @@ namespace EvoCore
             return d;
         }
 
-        internal static int Count(LuaComputer computer) => Linked(computer).Count;
+        internal static int Count(LuaComputer computer)
+        {
+            var names = Lua.DeclaredOf(computer)?.Displays;
+            return names != null && names.Count > 0 ? names.Count : Linked(computer).Count;
+        }
+
+        // Whether a block can be a Lua display: a monitor, or a block another mod shows a canvas on.
+        internal static bool IsDisplay(ICommand c) => c is CommandDisplay || c is Command command && Aspect(command) > 0f;
 
         // A computer's displays in link order: monitors, and blocks another mod shows a canvas on (SurfaceAspect).
         static List<Command> Linked(LuaComputer computer) =>
@@ -587,10 +597,11 @@ namespace EvoCore
     public class DisplayApi
     {
         readonly LuaComputer computer;
-        readonly int index;
-        public DisplayApi(LuaComputer host, int i) { computer = host; index = i; }
+        readonly DynValue which;   // a number or a display port's name
+        public DisplayApi(LuaComputer host, int i) { computer = host; which = DynValue.NewNumber(i); }
+        public DisplayApi(LuaComputer host, DynValue i) { computer = host; which = i; }
 
-        Monitors.Display D => Monitors.Get(computer, index);
+        Monitors.Display D => Monitors.Get(computer, which);
 
         public bool present => D != null;
         // A display surface (decals) another mod shows: see-through, so drawing nothing there leaves the view clear.
@@ -754,6 +765,7 @@ namespace EvoCore
         readonly LuaComputer computer;
         public DisplaysApi(LuaComputer host) { computer = host; }
         public int count => Monitors.Count(computer);
-        public DisplayApi get(int i) => new DisplayApi(computer, i);
+        // i: a display port's name, or a number (the declared display ports once there are any, else link order).
+        public DisplayApi get(DynValue i) => new DisplayApi(computer, i);
     }
 }

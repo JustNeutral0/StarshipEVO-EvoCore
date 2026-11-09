@@ -104,7 +104,16 @@ namespace EvoCore
                 if (GUILayout.Button("Save", GUILayout.Width(80))) Save();
                 if (GUILayout.Button("Revert", GUILayout.Width(80))) { text = saved; message = "Reverted."; syntax = ""; }
                 GUI.enabled = true;
+                var gone = DeleteButton(file);
                 GUILayout.EndHorizontal();
+                if (gone != null)
+                {
+                    message = $"Deleted {Path.GetFileName(file)}: moved to {Path.GetFileName(Path.GetDirectoryName(gone))}\\{Path.GetFileName(gone)}.";
+                    file = null;
+                    text = saved = "";
+                    syntax = "";
+                    return;
+                }
 
                 LiveCheck();
                 // A syntax error (checked as you type) wins; else the error a running copy stopped on.

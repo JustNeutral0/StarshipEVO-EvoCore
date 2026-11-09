@@ -242,6 +242,8 @@ namespace EvoCore
                 "rate", "how often tick runs, in seconds (0.1 unless the script sets it)",
                 "function on_input(i, value)", "runs when an input changes: i is the port's name once input ports are declared, else the link's number",
                 "function on_message(port, msg)", "runs for each message another computer sends on a two-way channel (see ports)",
+                "function on_key(key, down)", "runs when a key goes down or up (see keys)",
+                "function on_button(stick, button, down)", "runs when a joystick button goes down or up (see joystick)",
                 "print(...)", "shows a line in the Scripts tab",
                 "time()", "seconds since the game started");
             Global("ship", "The script's own ship, read only. Levels are 0 to 1.",
@@ -280,10 +282,29 @@ namespace EvoCore
                 "count / get(i) / on(i) / name(i) / block(i)", "as for inputs",
                 "set(i, value)", "sends a value (a number or true/false) to that block",
                 "all(value)", "sends it down every link");
+            Global("keys", "The keyboard and mouse buttons. While a menu is open (the game's, this screen, the link picker) " +
+                           "every key reads as up and no events fire, so typing doesn't fly the ship.",
+                "down(key)", "is it held now",
+                "pressed(key) / released(key)", "did it go down / come up since this script last asked (a tap between ticks still counts)",
+                "key names", "letters, digits (top row; keypad5 for the number pad), space, enter, esc, tab, backspace, up, down, " +
+                             "left, right, f1-f15, shift, ctrl, alt (either side), leftshift..., mouse0-mouse6, or a Unity KeyCode name");
+            Global("player", "You, as this script's ship sees you (single-player: always this machine's camera). " +
+                             "The ship's axes are its pilot seat's when it has one, else the ship's own.",
+                "seated", "sitting in a seat of this ship",
+                "aboard", "seated in it or standing on it",
+                "third_person", "the camera is in third person (it orbits the ship, so look() gives the orbit, not your head)",
+                "look()", "yaw, pitch: degrees from the ship's forward; yaw + right, pitch + up",
+                "aim()", "the look direction along the ship's right, up and forward (three numbers, -1 to 1)");
+            Global("joystick", "Joysticks, HOTAS and gamepads, as the game sees them: up to 4 devices, 28 axes and 20 buttons each.",
+                "count", "how many are connected",
+                "name(n)", "device n's name",
+                "axis(n, a)", "axis a (1-28) of device n, -1 to 1",
+                "button(n, b)", "is button b (1-20) of device n held",
+                "moving(n)", "every axis away from rest and every held button, as text: handy for finding which number is which");
             Global("ports", "Named link slots, so a program never depends on link order. Declare them, then put linked blocks in them " +
                             "with the link tool (it asks which port) or the Links tab. Saved in the computer. Channels are two-way " +
                             "between two linked Lua Computers and carry whole messages.",
-                "declare{ inputs = {...}, outputs = {...}, channels = {...} }", "the ports this program has, by name",
+                "declare{ inputs = {...}, outputs = {...}, displays = {...}, channels = {...} }", "the ports this program has, by name (adds to any declared before)",
                 "send(port, msg)", "a message (number, text, true/false, or a table of them) to the computer at the other end of a channel; false if it isn't connected",
                 "last(port)", "the last message that came in on a channel, or nil",
                 "linked(port)", "the name of what's in a port, or nil",
@@ -296,7 +317,7 @@ namespace EvoCore
                 "mode", "standard, boost, cruise, warp or dropoff; set boost or standard",
                 "release()", "let go of everything",
                 "flying / autopilot", "whether you're flying it, and whether the autopilot has it");
-            Global("display", "The computer's first linked monitor (or display surface). Coordinates are canvas units from the top left, " +
+            Global("display", "The computer's first display: its first declared display port (see ports), else its first linked monitor or display surface. Coordinates are canvas units from the top left, " +
                               "240 tall. Colours: names (green, amber, red, blue, cyan, white, grey, dim, black), \"#rrggbb\", or 0xrrggbb. " +
                               "Drawing stays until clear(): clear first in tick to animate.",
                 "present / surface", "is it there, and is it a see-through display surface",
@@ -313,9 +334,9 @@ namespace EvoCore
                 "bar(x, y, w, h, fill, color, back)", "a level bar, fill 0 to 1",
                 "text(x, y, s, color, size, align, font)", "text with its top at y; align left, center or right; font code, display or text",
                 "measure(s, size, font)", "how wide a text would be");
-            Global("displays", "Every display linked to the computer, in link order.",
+            Global("displays", "The computer's displays: by display port name, or by number (the declared display ports once there are any, else link order).",
                 "count", "how many",
-                "get(i)", "display i (see display)");
+                "get(i)", "a display port's name, or a number (see display)");
             Global("anim", "Poses and clips for the ship's rotators, hinges, pistons and rails, saved in the computer. " +
                            "A joint's value is 0 to 1 across its range.",
                 "joints()", "the list: id, name, kind, value (and angle for rotators)",

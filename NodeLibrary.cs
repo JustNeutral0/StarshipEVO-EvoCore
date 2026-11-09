@@ -306,7 +306,16 @@ return {{
                 if (GUILayout.Button("Save", GUILayout.Width(80))) Save();
                 if (GUILayout.Button("Revert", GUILayout.Width(80))) { text = saved; message = "Reverted."; }
                 GUI.enabled = true;
+                var gone = Lua.DeleteButton(file);
                 GUILayout.EndHorizontal();
+                if (gone != null)
+                {
+                    message = $"Deleted {Path.GetFileName(file)}: moved to {Path.GetFileName(Path.GetDirectoryName(gone))}\\{Path.GetFileName(gone)}.";
+                    file = null;
+                    text = saved = "";
+                    ScanNodesSoon();
+                    return;
+                }
 
                 LiveCheck();
                 NodeErrors.TryGetValue(Name, out var loadError);

@@ -85,6 +85,8 @@ namespace EvoCore
                 UserData.RegistrationPolicy = MoonSharp.Interpreter.Interop.InteropRegistrationPolicy.Automatic;
                 ExposePilot();
                 ExposePorts();
+                ExposeControls();
+                ExposePlayer();
                 Directory.CreateDirectory(ScriptsDir);
                 WriteStockLibs();
                 var example = Path.Combine(ScriptsDir, "example.lua");
@@ -179,8 +181,11 @@ end
                 try { Scan(); }
                 catch (Exception e) { Core.Log.Error("Lua scan failed: " + e); }
             }
+            ScanControls();
             foreach (var r in running.Values.ToArray())
             {
+                if (r.Script == null) continue;
+                DispatchControls(r);
                 if (r.Script == null) continue;
                 if (r.Context.Host is LuaComputer computer)
                 {

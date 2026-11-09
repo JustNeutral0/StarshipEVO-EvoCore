@@ -193,6 +193,18 @@ namespace EvoCore
             Types["setblock"] = Types["set block"];
             Types["set_block"] = Types["set block"];
 
+            // Keyboard and joysticks (Controls.cs).
+            category = "Controls";
+            Add("key", "1 while the key `key` is held (nothing counts while a menu is open)", None,
+                e => $"{e.Out("out")} = n(keys.down({e.Str("key")}))", "key=space");
+            Add("joystick axis", "axis `axis` of joystick `stick`, -1 to 1", None,
+                e => $"{e.Out("out")} = joystick.axis({e.Num("stick")}, {e.Num("axis")})", "stick=1", "axis=1");
+            Add("player look", "where you're looking, in degrees from the ship's forward (yaw + right, pitch + up), and whether you're seated in this ship", None,
+                e => $"do local y, p = player.look(); {e.Out("yaw")} = y; {e.Out("pitch")} = p; {e.Out("seated")} = n(player.seated) end");
+            Types["player look"].Outs = new[] { "yaw", "pitch", "seated" };
+            Add("joystick button", "1 while button `button` of joystick `stick` is held", None,
+                e => $"{e.Out("out")} = n(joystick.button({e.Num("stick")}, {e.Num("button")}))", "stick=1", "button=1");
+
             // Named ports (Ports.cs): the graph declares every port these nodes use.
             category = "Links";
             Add("port in", "the value of the computer's input port `port` (link a block into the port with the link tool or the Links tab)", None,
@@ -233,6 +245,11 @@ namespace EvoCore
             Doc("ship", "value", "which: " + string.Join(", ", shipNumbers.Concat(shipFlags).ToArray()), "out", "that value (levels 0 to 1; flags 1 or 0)");
             Doc("block", "label", "the block's Tag label", "value", "state, or the name of one of its readouts", "out", "the value, or 0 when there's no such block");
             Doc("set block", "label", "the block's Tag label", "in", "the value to set it to");
+            Doc("key", "key", "a key name: a letter, a digit, space, shift, ctrl, alt, enter, up, f1, keypad5, mouse0...", "out", "1 while it's held, else 0 (0 while a menu is open)");
+            Doc("joystick axis", "stick", "which stick or pad, 1 to 4", "axis", "which axis, 1 to 28 (the game's own numbering)", "out", "-1 to 1");
+            Doc("player look", "yaw", "degrees right (+) or left (-) of the ship's forward", "pitch", "degrees up (+) or down (-)",
+                "seated", "1 while you're sitting in a seat of this ship");
+            Doc("joystick button", "stick", "which stick or pad, 1 to 4", "button", "which button, 1 to 20", "out", "1 while it's held, else 0");
             Doc("port in", "port", "the input port's name", "out", "its value: the linked block's state, or the readout picked for it");
             Doc("port out", "port", "the output port's name", "in", "the value to send to the block in that port");
             Doc("send", "port", "the channel's name", "in", "the number to send to the other computer");

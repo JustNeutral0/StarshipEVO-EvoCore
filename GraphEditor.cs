@@ -245,7 +245,11 @@ namespace EvoCore
             static Vector2 menuAt;
             static string menuSearch = "";
             static Vector2 menuScroll;
-            static Rect menuRect;
+            // The canvas's last real size. Every IMGUI event comes after a Layout pass in which a GUILayout rect is a 1x1
+            // placeholder, so anything worked out then (the menu's place, once) is wrong for the click that follows.
+            static Rect canvasView;
+            static bool menuBarDrag;
+            static float menuBarGrab;
 
             static int selected = -1, pendingDelete = -1;     // selected: the node whose help shows below the canvas
             static readonly HashSet<int> picked = new HashSet<int>();   // the selected nodes
@@ -444,7 +448,15 @@ namespace EvoCore
                 if (GUILayout.Button("Save", GUILayout.Width(80))) Save();
                 if (GUILayout.Button("Revert", GUILayout.Width(80))) { Load(); message = "Reverted."; }
                 GUI.enabled = true;
+                var gone = Lua.DeleteButton(file);
                 GUILayout.EndHorizontal();
+                if (gone != null)
+                {
+                    message = $"Deleted {Path.GetFileName(file)}: moved to {Path.GetFileName(Path.GetDirectoryName(gone))}\\{Path.GetFileName(gone)}.";
+                    file = null;
+                    graph = null;
+                    return;
+                }
 
                 // A selected lua node's code opens under the canvas.
                 Node coding = null;
@@ -698,6 +710,7 @@ namespace EvoCore
                 }
                 GUI.BeginGroup(area);
                 var view = new Rect(0, 0, area.width, area.height);
+                if (Event.current.type != EventType.Layout) canvasView = view;
                 if (view.Contains(Event.current.mousePosition)) lastMouse = Event.current.mousePosition;   // where Ctrl+V pastes
                 if (Event.current.type == EventType.Repaint) DrawGrid(view);
 
@@ -829,7 +842,7 @@ namespace EvoCore
                         if (!view.Contains(m)) return;
                         if (menuOpen)
                         {
-                            if (menuRect.Contains(m)) return;   // the menu's own controls take it
+                            if (MenuRect().Contains(m)) return;   // the menu's own controls take it
                             menuOpen = false;
                             e.Use();
                             return;
@@ -973,10 +986,11 @@ namespace EvoCore
 
                     case EventType.ScrollWheel:
                         if (!view.Contains(m)) return;
-                        if (menuOpen && menuRect.Contains(m))
+                        if (menuOpen && MenuRect().Contains(m))
                         {
-                            // The menu's list scrolls itself: Unity's scroll view didn't get the wheel in here.
-                            menuScroll.y = Mathf.Clamp(menuScroll.y + e.delta.y * 22f, 0, menuMax);
+                            // The menu's list scrolls itself: Unity's scroll view didn't get the wheel in here. Three rows a
+                            // notch, by direction only: Unity 6 reports far smaller wheel steps than older Unity did.
+                            if (e.delta.y != 0f) menuScroll.y = Mathf.Clamp(menuScroll.y + Mathf.Sign(e.delta.y) * MenuRow * 3, 0, menuMax);
                             e.Use();
                             return;
                         }
@@ -1170,11 +1184,34 @@ namespace EvoCore
 
             // A searchable list grouped by category; the wheel scrolls it (HandleMouse), the hovered node's help shows
             // at the bottom, Enter adds the first match and Escape closes it.
+            const float MenuRow = 22;
+
+            const float MenuW = 250;
+
+            // Where the menu is: at the click, kept inside the canvas, as tall as the canvas allows up to 560.
+            static Rect MenuRect()
+            {
+                var h = Mathf.Clamp(canvasView.height - 8, 200, 560);
+                var x = canvasView.width > MenuW + 8 ? Mathf.Clamp(menuAt.x, 4, canvasView.width - MenuW - 4) : menuAt.x;
+                var y = canvasView.height > h + 8 ? Mathf.Clamp(menuAt.y, 4, canvasView.height - h - 4) : menuAt.y;
+                return new Rect(x, y, MenuW, h);
+            }
+
             static void DrawMenu(Rect view)
             {
-                const float W = 250, H = 340, RowH = 22, HelpH = 46;
-                menuRect = new Rect(Mathf.Clamp(menuAt.x, 4, view.width - W - 4), Mathf.Clamp(menuAt.y, 4, view.height - H - 4), W, H);
+                const float W = MenuW, RowH = MenuRow, HelpH = 46, Bar = 12;
+                var menuRect = MenuRect();
+                var H = menuRect.height;
                 var e = Event.current;
+                // Page Up/Down and the arrow keys scroll it too (before the search field, which would take the arrows).
+                if (e.type == EventType.KeyDown && (e.keyCode == KeyCode.PageDown || e.keyCode == KeyCode.PageUp || e.keyCode == KeyCode.DownArrow || e.keyCode == KeyCode.UpArrow))
+                {
+                    var page = e.keyCode == KeyCode.PageDown || e.keyCode == KeyCode.PageUp;
+                    var step = page ? H - 36 - HelpH - 4 - RowH : RowH;
+                    var down = e.keyCode == KeyCode.PageDown || e.keyCode == KeyCode.DownArrow;
+                    menuScroll.y = Mathf.Clamp(menuScroll.y + (down ? step : -step), 0, menuMax);
+                    e.Use();
+                }
                 if (e.type == EventType.Repaint)
                 {
                     Rounded(new Rect(menuRect.x + 3, menuRect.y + 5, W, H), new Color(0, 0, 0, 0.5f));
@@ -1204,11 +1241,32 @@ namespace EvoCore
                 var list = new Rect(menuRect.x + 6, menuRect.y + 36, W - 12, H - 36 - HelpH - 4);
                 menuMax = Mathf.Max(0, entries.Count * RowH - list.height);
                 menuScroll.y = Mathf.Clamp(menuScroll.y, 0, menuMax);
+
+                // The scroll bar: drag the handle, or click the track above or below it for a page.
+                var track = new Rect(list.xMax - Bar, list.y, Bar, list.height);
+                var thumbH = Mathf.Max(28, list.height * list.height / (list.height + menuMax));
+                var thumb = new Rect(track.x, track.y + (track.height - thumbH) * (menuMax > 0 ? menuScroll.y / menuMax : 0), Bar, thumbH);
+                if (menuMax > 0)
+                {
+                    if (e.type == EventType.MouseDown && e.button == 0 && track.Contains(e.mousePosition))
+                    {
+                        if (thumb.Contains(e.mousePosition)) { menuBarDrag = true; menuBarGrab = e.mousePosition.y - thumb.y; }
+                        else menuScroll.y = Mathf.Clamp(menuScroll.y + (e.mousePosition.y > thumb.y ? 1 : -1) * (list.height - RowH), 0, menuMax);
+                        e.Use();
+                    }
+                    else if (e.type == EventType.MouseDrag && menuBarDrag)
+                    {
+                        var room = Mathf.Max(1f, track.height - thumbH);
+                        menuScroll.y = Mathf.Clamp((e.mousePosition.y - menuBarGrab - track.y) / room * menuMax, 0, menuMax);
+                        e.Use();
+                    }
+                }
+                if (e.type == EventType.MouseUp && menuBarDrag) { menuBarDrag = false; e.Use(); }
                 NodeType hovered = null;
                 GUI.BeginGroup(list);
                 for (int i = 0; i < entries.Count; i++)
                 {
-                    var row = new Rect(0, i * RowH - menuScroll.y, list.width - (menuMax > 0 ? 8 : 0), RowH);
+                    var row = new Rect(0, i * RowH - menuScroll.y, list.width - (menuMax > 0 ? Bar + 4 : 0), RowH);
                     if (row.yMax < 0 || row.y > list.height) continue;
                     var entry = entries[i];
                     if (entry.type == null) { GUI.Label(new Rect(row.x + 4, row.y + 4, row.width, row.height - 4), entry.header.ToUpperInvariant(), menuHeader); continue; }
@@ -1221,13 +1279,13 @@ namespace EvoCore
                     }
                     if (GUI.Button(new Rect(row.x + 22, row.y, row.width - 22, row.height), entry.type.Name, menuItem)) Add(entry.type);
                 }
+                GUI.EndGroup();
                 if (menuMax > 0 && e.type == EventType.Repaint)
                 {
-                    // A thin bar showing where the list is.
-                    var bar = list.height * list.height / (list.height + menuMax);
-                    Fill(new Rect(list.width - 5, (list.height - bar) * (menuScroll.y / menuMax), 4, bar), new Color(1, 1, 1, 0.18f));
+                    Rounded(track, new Color(1, 1, 1, 0.05f));
+                    var lit = menuBarDrag || thumb.Contains(e.mousePosition);
+                    Rounded(new Rect(thumb.x + 2, thumb.y + 1, thumb.width - 4, thumb.height - 2), new Color(1, 1, 1, lit ? 0.42f : 0.24f));
                 }
-                GUI.EndGroup();
 
                 var help = hovered ?? entries.Select(x => x.type).FirstOrDefault(t => t != null);
                 var helpRect = new Rect(menuRect.x + 10, menuRect.yMax - HelpH - 2, W - 20, HelpH);
@@ -1241,6 +1299,7 @@ namespace EvoCore
                     e.Use();
                 }
                 else if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape) { menuOpen = false; e.Use(); }
+
             }
 
             static void Add(NodeType type)

@@ -263,6 +263,7 @@ namespace EvoCore
             public float Glow;
             public bool Paint, Holo, Defined;
             public int Row, Diffuse, Specular;
+            public Brick Brick;   // the block whose materials hold this row
         }
 
         public static readonly List<Surface> Surfaces = new List<Surface>();
@@ -332,7 +333,8 @@ namespace EvoCore
             var made = new List<Surface>();
             foreach (var name in names)
             {
-                var s = new Surface { Key = key, Name = name, Mtl = mtlPath, Row = start + made.Count, Diffuse = diffuse.depth + diffuseAdded + made.Count, Specular = specular.depth + specularAdded + made.Count };
+                // The layers are a first guess: AddSlices sets the ones the slices really get (other mods may append first).
+                var s = new Surface { Key = key, Name = name, Mtl = mtlPath, Brick = brick, Row = start + made.Count, Diffuse = diffuse.depth + diffuseAdded + made.Count, Specular = specular.depth + specularAdded + made.Count };
                 Define(s, mtl);
                 if (!s.Defined) Core.Log.Warning($"Looks: {key} surface \"{name}\" isn't in {Path.GetFileName(mtlPath)}; it'll be grey");
                 table[s.Row] = s.Holo ? HoloRow(brick, template, s) : Row(template, s);
@@ -391,8 +393,11 @@ namespace EvoCore
         static Color32 SpecularPixel(Surface s) =>
             new Color32(Shine.r, Shine.g, (byte)(s.Paint ? 255 : 0), (byte)(s.Glow > 0 ? Mathf.RoundToInt(s.Glow * 255) : 255));
 
-        // After every brick has loaded: copy the stock arrays into bigger ones with our slices on the end, and point
-        // the shaders (and the decal code, which reads VOXEL_DIFFUSE on the CPU) at them.
+        // After every brick has loaded: copy the arrays into bigger ones with our slices on the end, and point the shaders
+        // (and the decal code, which reads VOXEL_DIFFUSE on the CPU) at them. Every existing layer and all its mips are
+        // kept where they are (Keel's legacy-extension rules, docs/KEEL-MATERIAL-COMPATIBILITY.md in Starship-Keel), and
+        // our rows are pointed at the layers the slices actually got: a mod that appends layers after our rows were made
+        // (Keel attachment palettes, Tractor Beam) moves them, which once showed the Lua Computer someone else's texture.
         [HarmonyPatch(typeof(Brick), nameof(Brick.LoadAllResourcesRuntime))]
         static class AddSlices
         {
@@ -414,6 +419,24 @@ namespace EvoCore
                     ResourcesLoader.VOXEL_DIFFUSE = Diffuse;
                     Shader.SetGlobalTexture("MAIN_TEX", Diffuse);
                     Shader.SetGlobalTexture("SPECULAR_TEX", Specular);
+                    var diffuseBase = Diffuse.depth - Surfaces.Count;
+                    var specularBase = Specular.depth - Surfaces.Count;
+                    var moved = 0;
+                    for (int k = 0; k < Surfaces.Count; k++)
+                    {
+                        var s = Surfaces[k];
+                        if (s.Diffuse != diffuseBase + k || s.Specular != specularBase + k) moved++;
+                        s.Diffuse = diffuseBase + k;
+                        s.Specular = specularBase + k;
+                        Point(s);
+                    }
+                    if (moved > 0)
+                    {
+                        Core.Log.Msg($"Looks: {moved} surface(s) moved to the layers they really got (another mod added layers first)");
+                        // Already on the GPU? Send the corrected table again.
+                        if (AccessTools.Field(typeof(VoxelMaterialResources), "materialParamsBuffer").GetValue(null) != null)
+                            AccessTools.Method(typeof(VoxelMaterialResources), "LoadBuffers").Invoke(null, null);
+                    }
                     Core.Log.Msg($"Looks: {Surfaces.Count} new surface(s); texture arrays now {Diffuse.depth} diffuse, {Specular.depth} specular");
                 }
                 catch (Exception e)
@@ -423,6 +446,22 @@ namespace EvoCore
                     Core.Log.Error("Looks: couldn't add texture slices: " + e);
                 }
             }
+        }
+
+        // Points a surface's material row (in the game's table and in its block's own list) at its layers.
+        static void Point(Surface s)
+        {
+            void Set(ref VoxelMaterial m)
+            {
+                m.TextureID = s.Diffuse;
+                if (!s.Holo) m.specularID = s.Specular;
+            }
+            var table = VoxelMaterialResources.materialParamDatas;
+            if (s.Row >= 0 && s.Row < table.Length) { var m = table[s.Row]; Set(ref m); table[s.Row] = m; }
+            var rows = s.Brick?.VoxelMaterials;
+            if (rows == null) return;
+            for (int i = 0; i < rows.Length; i++)
+                if (rows[i].Id == s.Row) { var m = rows[i]; Set(ref m); rows[i] = m; }
         }
 
         static Texture2DArray Grow(Texture2DArray stock, List<Action<Texture2DArray, int>> add)

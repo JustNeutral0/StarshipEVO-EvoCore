@@ -18,17 +18,20 @@ namespace EvoCore
     //  - Inputs and outputs: inputs.get("throttle"), outputs.set("lights", true). An input port reads its block's
     //    on/off state or one of its readouts (a thruster's thrust...). With ports declared, numbers count the declared
     //    ports (inputs.get(1) is the first declared input); without, they count links, oldest first, as before.
+    //  - Displays: displays = {"hud"} names the monitors and display surfaces the program draws on;
+    //    displays.get("hud") is the one in that port, and numbers (and `display`, number 1) count the declared ones.
     //  - Channels are two-way between two linked computers: one ordinary game link (the game allows no loops, so
     //    there can't be one each way) is the cable, and both ends send whole messages over it (numbers, text,
     //    tables): ports.send("nav", { heading = 90 }) on one, on_message(port, msg) / ports.last("nav") on the other.
-    // PortMap lines, tab separated: in <port> <block> <value> / out <port> <block> / ch <port> <computer> <their port>,
+    // PortMap lines, tab separated: in <port> <block> <value> / out <port> <block> / disp <port> <block> /
+    // ch <port> <computer> <their port>,
     // where a block is "<child entity id>.<instance id>" on the computer's own ship.
     public static partial class Lua
     {
         internal class Declared
         {
-            public readonly List<string> Inputs = new List<string>(), Outputs = new List<string>(), Channels = new List<string>();
-            public bool Any => Inputs.Count + Outputs.Count + Channels.Count > 0;
+            public readonly List<string> Inputs = new List<string>(), Outputs = new List<string>(), Channels = new List<string>(), Displays = new List<string>();
+            public bool Any => Inputs.Count + Outputs.Count + Channels.Count + Displays.Count > 0;
         }
 
         internal class PortLink
@@ -57,7 +60,10 @@ namespace EvoCore
             if (c == null) return "(nothing)";
             string label = null;
             try { label = c.brickCoord.TagData.label; } catch { }
-            var kind = c.OverTextIndirect ?? c.GetType().Name;
+            var kind = c.OverTextIndirect;
+            // Some blocks (a text screen) only call themselves "Command": the brick's own name says more.
+            if (string.IsNullOrWhiteSpace(kind) || kind == "Command")
+                try { kind = c.brickCoord.brickData.Brick.name; } catch { kind = c.GetType().Name; }
             return string.IsNullOrWhiteSpace(label) ? kind : $"{label.Trim()} ({kind})";
         }
 
@@ -71,7 +77,7 @@ namespace EvoCore
             foreach (var line in text.Split('\n'))
             {
                 var w = line.Split('\t');
-                if (w.Length < 3 || (w[0] != "in" && w[0] != "out" && w[0] != "ch")) continue;
+                if (w.Length < 3 || (w[0] != "in" && w[0] != "out" && w[0] != "ch" && w[0] != "disp")) continue;
                 list.Add(new PortLink { Kind = w[0], Port = w[1], Key = w[2], Extra = w.Length > 3 ? w[3] : "" });
             }
             portLinks[c] = (text, list);
@@ -100,6 +106,31 @@ namespace EvoCore
             Store(c, links);
         }
 
+        internal static void AssignDisplay(LuaComputer c, string port, ICommand display)
+        {
+            var links = LinksOf(c).Where(l => !(l.Kind == "disp" && l.Port == port)).ToList();
+            links.Add(new PortLink { Kind = "disp", Port = port, Key = KeyOf(display) });
+            Store(c, links);
+        }
+
+        // The block in a display port, or (a number) the declared display port's or the linked display's.
+        internal static Command DisplayBlock(LuaComputer c, DynValue i, List<Command> linked)
+        {
+            var names = DeclaredOf(c)?.Displays;
+            string name = null;
+            if (i.Type == DataType.String) name = i.String;
+            else if (i.Type == DataType.Number && names != null && names.Count > 0)
+            {
+                var n = (int)i.Number;
+                if (n < 1 || n > names.Count) return null;
+                name = names[n - 1];
+            }
+            if (name != null) return TargetOf(c, Port(c, "disp", name)) as Command;
+            if (i.Type != DataType.Number) return null;
+            var k = (int)i.Number;
+            return k >= 1 && k <= linked.Count ? linked[k - 1] : null;
+        }
+
         // A two-way channel: both computers remember the other end.
         internal static void Pair(LuaComputer a, string aPort, LuaComputer b, string bPort)
         {
@@ -126,7 +157,7 @@ namespace EvoCore
         internal static ICommand TargetOf(LuaComputer c, PortLink link)
         {
             if (link == null) return null;
-            var list = link.Kind == "in" ? c.Inputs : link.Kind == "out" ? c.Outputs : c.Inputs.Concat(c.Outputs).ToList();
+            var list = link.Kind == "in" ? c.Inputs : link.Kind == "out" || link.Kind == "disp" ? c.Outputs : c.Inputs.Concat(c.Outputs).ToList();
             return list.FirstOrDefault(x => KeyOf(x) == link.Key);
         }
 
@@ -214,7 +245,8 @@ namespace EvoCore
             return new PortsApi(computer);
         });
 
-        // ports.declare{ inputs = {...}, outputs = {...}, channels = {...} }   the ports this program has
+        // ports.declare{ inputs = {...}, outputs = {...}, displays = {...}, channels = {...} }   ports this program has
+        //                                (adds to any declared before, so a graph and its lua nodes can each declare theirs)
         // ports.send(port, msg)          a message (number, text, true/false or a table of them) to the far end of a
         //                                channel; false when the channel isn't connected
         // ports.last(port)               the last message that came in on a channel, or nil
@@ -228,7 +260,7 @@ namespace EvoCore
 
             public void declare(Table spec)
             {
-                var d = new Declared();
+                if (!declared.TryGetValue(computer, out var d)) d = new Declared();
                 void Read(string key, List<string> into)
                 {
                     var v = spec.Get(key);
@@ -244,6 +276,7 @@ namespace EvoCore
                 Read("inputs", d.Inputs);
                 Read("outputs", d.Outputs);
                 Read("channels", d.Channels);
+                Read("displays", d.Displays);
                 declared[computer] = d;
             }
 
@@ -290,6 +323,7 @@ namespace EvoCore
                 foreach (var p in d.Inputs) Add(p, "input", "in");
                 foreach (var p in d.Outputs) Add(p, "output", "out");
                 foreach (var p in d.Channels) Add(p, "channel", "ch");
+                foreach (var p in d.Displays) Add(p, "display", "disp");
                 return t;
             }
         }

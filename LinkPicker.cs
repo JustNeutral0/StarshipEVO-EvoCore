@@ -67,6 +67,10 @@ namespace EvoCore
                         if (theirs.Count == 0 || mine.Count == 1 || theirs.Count == 1 || p == q)
                             list.Add(new Choice { Label = $"Two-way channel: {p}  <->  {q}", Pick = () => Lua.Pair(source, p, dest, q) });
             }
+            // A computer to a monitor or display surface: which display it is.
+            if (source != null && Monitors.IsDisplay(to))
+                foreach (var p in Lua.DeclaredOf(source)?.Displays ?? new List<string>())
+                    list.Add(new Choice { Label = $"Display: {p}", Pick = () => Lua.AssignDisplay(source, p, to) });
             if (dest != null)
                 foreach (var p in Lua.DeclaredOf(dest)?.Inputs ?? new List<string>())
                 {

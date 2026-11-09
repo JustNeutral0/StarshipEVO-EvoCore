@@ -127,6 +127,36 @@ namespace EvoCore
             }
         }
 
+        // Delete for the Graph, Script and Nodes editors: asks first, then moves the file into a "deleted" folder beside
+        // it (named with the time), so a slip can be undone by moving it back. Not offered for a computer's own program.
+        // Returns where it went once it's moved, else null.
+        static string confirmDelete;
+
+        internal static string DeleteButton(string file)
+        {
+            if (file == null || IsMirror(file) || !File.Exists(file)) return null;
+            if (confirmDelete != file)
+            {
+                if (GUILayout.Button("Delete", GUILayout.Width(80))) confirmDelete = file;
+                return null;
+            }
+            GUILayout.Label("Delete it?", GUILayout.Width(70));
+            var yes = GUILayout.Button("Yes", GUILayout.Width(50));
+            if (GUILayout.Button("No", GUILayout.Width(50))) confirmDelete = null;
+            if (!yes) return null;
+            confirmDelete = null;
+            try
+            {
+                var dir = Path.Combine(Path.GetDirectoryName(file), "deleted");
+                Directory.CreateDirectory(dir);
+                var to = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(file)} {DateTime.Now:yyyy-MM-dd HHmmss}{Path.GetExtension(file)}");
+                File.Move(file, to);
+                nextScan = 0f;
+                return to;
+            }
+            catch (Exception e) { Core.Log.Warning("Delete failed: " + e.Message); return null; }
+        }
+
         // What the buttons last did, shown beside them.
         internal static string programMessage = "";
 
@@ -155,6 +185,54 @@ namespace EvoCore
             Mirror(c);
             nextScan = 0f;
             return "back to Lua: " + label;
+        }
+
+        // Puts a scripts\ file on the computer with that label and id, as "Put on computer" does.
+        public static string PutScript(string label, string programId, string file)
+        {
+            var c = ByLabel(label, programId);
+            var path = Path.Combine(ScriptsDir, file);
+            if (c == null || !File.Exists(path)) return "no such computer or file";
+            c.SetProgram(file.EndsWith(".graph", StringComparison.OrdinalIgnoreCase) ? "graph" : "lua", File.ReadAllText(path).Replace("\r\n", "\n"));
+            Mirror(c);
+            nextScan = 0f;
+            return $"{file} is now on {label} {c.ProgramId}";
+        }
+
+        // Display port test: puts a program declaring one display port, "main", on a computer, puts its first linked
+        // display in that port, and DisplayPortUndo puts the old program back. The program prints what it sees.
+        static readonly Dictionary<LuaComputer, string> beforeDisplayTest = new Dictionary<LuaComputer, string>();
+
+        const string DisplayTest =
+@"ports.declare{ displays = {'main'} }
+function tick(dt)
+  local d = displays.get('main')
+  if d.present then d.clear(); d.text(10, 10, 'PORT main', 'green', 28) end
+  print(string.format('main=%s count=%d display1=%s', tostring(d.present), displays.count, tostring(display.present)))
+end
+";
+
+        public static string DisplayPortTest(string label, string programId, bool assign)
+        {
+            var c = ByLabel(label, programId);
+            if (c == null) return "no such computer";
+            if (!beforeDisplayTest.ContainsKey(c)) beforeDisplayTest[c] = c.Program;
+            if (c.Program != DisplayTest) { c.SetProgram("lua", DisplayTest); Mirror(c); nextScan = 0f; }
+            var first = c.Outputs.FirstOrDefault(Monitors.IsDisplay);
+            if (assign && first != null) AssignDisplay(c, "main", first);
+            return $"test program on; first display: {(first != null ? Describe(first) : "none")}{(assign ? ", put in port main" : "")}";
+        }
+
+        public static string DisplayPortUndo(string label, string programId)
+        {
+            var c = ByLabel(label, programId);
+            if (c == null || !beforeDisplayTest.TryGetValue(c, out var before)) return "nothing to undo";
+            Clear(c, "disp", "main");
+            c.SetProgram("lua", before);
+            beforeDisplayTest.Remove(c);
+            Mirror(c);
+            nextScan = 0f;
+            return "program restored";
         }
 
         static LuaComputer ByLabel(string label, string programId) =>
