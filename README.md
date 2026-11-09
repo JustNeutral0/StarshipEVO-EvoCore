@@ -3,7 +3,7 @@
 A Starship EVO mod that adds the **Lua Computer**, a programmable logic block, and the shared base that other
 mods (such as [Cockpit Displays](https://github.com/JustNeutral0/StarshipEVO-CockpitDisplays)) build on.
 
-> Early test release. Built and tested against Starship EVO early-access **26w45a**, single-player, creative.
+> Early test release. Built and tested against Starship EVO early-access **26w45a** (Unity 6 beta), single-player, creative.
 > Game updates may break it until it's rebuilt. Expect rough edges and please report them in Issues.
 
 ## What it adds
@@ -25,6 +25,8 @@ mods (such as [Cockpit Displays](https://github.com/JustNeutral0/StarshipEVO-Coc
 ## Install
 
 You need [Starship Uplink](https://github.com/MadTheDog/Starship-Uplink) (it sets up BepInEx for the game).
+
+**First, the game build:** these mods are built for the **Unity 6 beta** of Starship EVO, not the default build. In Steam, right-click Starship EVO, open **Properties > Betas**, pick **unity6**, and let it update. The mods don't work on the default build (character creation breaks, for one).
 
 1. In Uplink, choose **Add from GitHub** and enter `JustNeutral0/StarshipEVO-EvoCore`.
 2. Pick the `justneutral.evocore-<version>.zip` asset, then install it into your profile.
