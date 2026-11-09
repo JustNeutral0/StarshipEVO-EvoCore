@@ -39,6 +39,16 @@ Your scripts, graphs, custom nodes and libraries live in `UserData\EvoCore\` in 
 - Single-player only for now: joint animation and some display links aren't synced in multiplayer.
 - The Lua Computer uses brick id 500 (declared in the package, so Uplink can warn about clashes).
 
+## Building from source
+
+You need the .NET SDK and Starship EVO with BepInEx (Starship Uplink sets it up). ```
+dotnet build EvoCore.csproj -c Release -p:Loader=BepInEx -p:Game="C:\path\to\Starship EVO"
+```
+
+`-p:Game` is your game folder (it defaults to the usual Steam location). The DLL lands in `bin\BepInEx\Release\`.
+
+[MODDING.md](MODDING.md) explains how other mods build on EvoCore.
+
 ## Licence
 
 MIT, see [LICENSE](LICENSE). EvoCore bundles MoonSharp (BSD 3-Clause), see

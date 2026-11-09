@@ -1,0 +1,12 @@
+<Project>
+  <!-- The BepInEx build (see Directory.Build.props): BepInEx's DLLs in place of MelonLoader's. -->
+  <PropertyGroup Condition="'$(Loader)' == 'BepInEx'">
+    <DefineConstants>$(DefineConstants);BEPINEX</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(Loader)' == 'BepInEx'">
+    <Reference Remove="$(Game)\MelonLoader\net35\MelonLoader.dll" />
+    <Reference Remove="$(Game)\MelonLoader\net35\0Harmony.dll" />
+    <Reference Include="$(Game)\BepInEx\core\BepInEx.dll" Private="false" />
+    <Reference Include="$(Game)\BepInEx\core\0Harmony.dll" Private="false" />
+  </ItemGroup>
+</Project>

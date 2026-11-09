@@ -1,0 +1,14 @@
+<Project>
+  <!-- Which mod loader a build is for: Melon (the default) or BepInEx (dotnet build -p:Loader=BepInEx). The BepInEx
+       build goes to bin\BepInEx\ and obj\BepInEx\, so both builds sit side by side. Directory.Build.targets swaps the
+       loader references and defines BEPINEX for the code. -->
+  <PropertyGroup>
+    <Loader Condition="'$(Loader)' == ''">Melon</Loader>
+    <!-- Neither build may pick up the other's generated files. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**</DefaultItemExcludes>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Loader)' == 'BepInEx'">
+    <BaseIntermediateOutputPath>obj\BepInEx\</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin\BepInEx\</BaseOutputPath>
+  </PropertyGroup>
+</Project>

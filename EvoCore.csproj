@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>EvoCore</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <NoStdLib>true</NoStdLib>
+    <NoStandardLibraries>true</NoStandardLibraries>
+    <AddAdditionalExplicitAssemblyReferences>false</AddAdditionalExplicitAssemblyReferences>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Game Condition="'$(Game)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Starship EVO</Game>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="$(Game)\Starship EVO_Data\Managed\*.dll" Private="false" />
+    <Reference Include="$(Game)\MelonLoader\net35\MelonLoader.dll" Private="false" />
+    <Reference Include="$(Game)\MelonLoader\net35\0Harmony.dll" Private="false" />
+    <Reference Include="libs\MoonSharp.Interpreter.dll" Private="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="lib\*.lua" LogicalName="EvoCore.lib.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="looks\*" LogicalName="EvoCore.looks.%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>
