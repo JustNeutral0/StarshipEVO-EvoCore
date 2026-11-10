@@ -70,7 +70,17 @@ namespace EvoCore
             public bool InputsPrimed;
             public int NodeVersion;   // Graphs.Version when it started: a graph restarts when a node changes
             public long LibVersion;   // libVersion when it started: every script restarts when a lib file changes
+            public double StepsPerSecond;   // Lua steps it ran over the last second (counted in StepChunk lots)
+            public long WindowSteps;
+            public float WindowStart;
         }
+
+        // Steps are counted by letting a call pause every StepChunk steps (MoonSharp has no step counter); a call that
+        // runs past its limit (InstructionLimit, more for a mainframe) is stopped.
+        const int StepChunk = 1000;
+
+        // Lua steps a computer ran over the last second (0 when it isn't running): the load a mainframe measures.
+        internal static double StepsPerSecond(Command host) => running.TryGetValue(host, out var r) && r.Script != null ? r.StepsPerSecond : 0.0;
 
         static readonly Dictionary<string, Func<Context, object>> modules = new Dictionary<string, Func<Context, object>>();
         static readonly Dictionary<Command, Running> running = new Dictionary<Command, Running>();
@@ -87,6 +97,7 @@ namespace EvoCore
                 ExposePorts();
                 ExposeControls();
                 ExposePlayer();
+                Mainframes.Expose();
                 Directory.CreateDirectory(ScriptsDir);
                 WriteStockLibs();
                 var example = Path.Combine(ScriptsDir, "example.lua");
@@ -198,6 +209,12 @@ end
                 var tick = r.Script.Globals.Get("tick");
                 var rate = r.Script.Globals.Get("rate");
                 var interval = rate.Type == DataType.Number ? Mathf.Max(0.02f, (float)rate.Number) : 0.1f;
+                // A mainframe over its capacity ticks that much slower; one without power doesn't tick at all.
+                if (r.Context.Host is Mainframe mainframe)
+                {
+                    if (mainframe.Unpowered) { r.Next = Time.unscaledTime + 0.5f; continue; }
+                    interval *= Mathf.Max(1f, mainframe.Load);
+                }
                 var dt = Time.unscaledTime - (r.Next - interval);
                 r.Next = Time.unscaledTime + interval;
                 if (tick.Type != DataType.Function) continue;
@@ -223,6 +240,8 @@ end
                 string file = null, source = null;
                 if (host is LuaComputer computer)
                 {
+                    // A terminal runs nothing itself: its mainframe draws on its monitors (Mainframe.cs).
+                    if (Mainframes.TerminalOf(computer) != null) continue;
                     if (computer.HasProgram)
                     {
                         // Its own program (ComputerPrograms.cs), through its working file.
@@ -309,17 +328,28 @@ end
         static void Call(Running r, DynValue function, params DynValue[] args)
         {
             var watch = Stopwatch.StartNew();
+            var limit = r.Context.Host is Mainframe m ? m.StepLimit : InstructionLimit;
+            long chunks = 0;
             try
             {
                 var co = r.Script.CreateCoroutine(function).Coroutine;
-                co.AutoYieldCounter = InstructionLimit;
+                co.AutoYieldCounter = StepChunk;
                 co.Resume(args);
+                while (co.State == CoroutineState.ForceSuspended && ++chunks * StepChunk < limit) co.Resume();
                 if (co.State == CoroutineState.ForceSuspended)
-                    Fail(r, $"ran more than {InstructionLimit} steps in one go (an endless loop?), so it was stopped");
+                    Fail(r, $"ran more than {limit} steps in one go (an endless loop?), so it was stopped");
             }
             catch (InterpreterException e) { Fail(r, e.DecoratedMessage ?? e.Message); }
             catch (Exception e) { Fail(r, e.Message); }
             var ms = watch.Elapsed.TotalMilliseconds;
+            r.WindowSteps += chunks * StepChunk + StepChunk / 2;   // full chunks, and the last one part used: count it half
+            if (Time.unscaledTime - r.WindowStart >= 1f)
+            {
+                var span = Mathf.Max(1f, Time.unscaledTime - r.WindowStart);
+                r.StepsPerSecond = r.WindowStart <= 0f ? r.WindowSteps : r.WindowSteps / span;
+                r.WindowSteps = 0;
+                r.WindowStart = Time.unscaledTime;
+            }
             r.Ms = r.Ms * 0.9 + ms * 0.1;
             Perf.Record("lua " + r.Context.Name, ms);
         }
@@ -562,14 +592,21 @@ end
 
         internal static void RescanSoon() => nextScan = 0f;
 
-        // The stock lib files (embedded from _ModDev\EvoCore\lib) are written when missing, never over edits.
+        // The stock lib files and scripts (embedded from _ModDev\EvoCore\lib and scripts) are written when missing,
+        // never over edits.
         static void WriteStockLibs()
         {
-            Directory.CreateDirectory(LibDir);
+            WriteStock("EvoCore.lib.", LibDir);
+            WriteStock("EvoCore.scripts.", ScriptsDir);
+        }
+
+        static void WriteStock(string prefix, string dir)
+        {
+            Directory.CreateDirectory(dir);
             var asm = typeof(Lua).Assembly;
-            foreach (var res in asm.GetManifestResourceNames().Where(n => n.StartsWith("EvoCore.lib.") && n.EndsWith(".lua")))
+            foreach (var res in asm.GetManifestResourceNames().Where(n => n.StartsWith(prefix) && n.EndsWith(".lua")))
             {
-                var path = Path.Combine(LibDir, res.Substring("EvoCore.lib.".Length));
+                var path = Path.Combine(dir, res.Substring(prefix.Length));
                 if (System.IO.File.Exists(path)) continue;
                 using (var stream = asm.GetManifestResourceStream(res))
                 using (var reader = new StreamReader(stream)) System.IO.File.WriteAllText(path, reader.ReadToEnd());

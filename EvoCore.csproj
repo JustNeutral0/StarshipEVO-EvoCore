@@ -19,6 +19,7 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="lib\*.lua" LogicalName="EvoCore.lib.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="scripts\*.lua" LogicalName="EvoCore.scripts.%(Filename)%(Extension)" />
     <!-- Not the .obj: the Lua Computer's mesh is made from the game's own on the player's machine (LuaComputerBlock.Gate). -->
     <EmbeddedResource Include="looks\*" Exclude="looks\*.obj" LogicalName="EvoCore.looks.%(Filename)%(Extension)" />
   </ItemGroup>

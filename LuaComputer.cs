@@ -24,8 +24,9 @@ namespace EvoCore
         protected override bool CanPropagate => false;
         public override bool CanActivateManually(PlayerCommandManager commandManager) => true;
 
-        // Called on the local player's key release only, so this never goes over the network.
-        public override void OnKeyUp(PlayerCommandManager playerManager) => Lua.OpenComputer(this);
+        // Called on the local player's key release only, so this never goes over the network. A terminal opens its
+        // mainframe's program (Mainframe.cs).
+        public override void OnKeyUp(PlayerCommandManager playerManager) => Lua.OpenComputer(Mainframes.TerminalOf(this) ?? this);
 
         // Its own program (ComputerPrograms.cs), saved in the block: "graph" or "lua", and an id naming its working
         // file. Null until the computer is first opened; until then it runs scripts\<label>.
@@ -116,10 +117,10 @@ namespace EvoCore
             }
             catch (Exception e) { Core.Log.Error("Lua Computer: couldn't read its stored program: " + e.Message); }
         }
-        public override string OverText => Lua.ComputerStatus(this);
+        public override string OverText => Mainframes.TerminalOf(this) is Mainframe m ? Mainframes.TerminalStatus(m) : Lua.ComputerStatus(this);
         public override string OverTextIndirect => "Lua Computer";
 
-        // The script's name: the block's Tag-tool label, or "computer".
+        // The script's name: the block's Tag-tool label, or DefaultScript ("computer"; a Mainframe's is "mainframe").
         public string ScriptName
         {
             get
@@ -127,11 +128,13 @@ namespace EvoCore
                 try
                 {
                     var label = brickCoord.TagData.label;
-                    return string.IsNullOrEmpty(label) ? "computer" : label.Trim();
+                    return string.IsNullOrEmpty(label) ? DefaultScript : label.Trim();
                 }
-                catch { return "computer"; }
+                catch { return DefaultScript; }
             }
         }
+
+        protected virtual string DefaultScript => "computer";
 
         // Linked blocks, oldest link first. (The game keeps a computer's links newest first, and that order survives
         // saving; named ports (Ports.cs) are the way not to depend on it at all.)

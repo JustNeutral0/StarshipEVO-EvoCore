@@ -113,9 +113,17 @@ namespace EvoCore
         // Whether a block can be a Lua display: a monitor, or a block another mod shows a canvas on.
         internal static bool IsDisplay(ICommand c) => c is CommandDisplay || c is Command command && Aspect(command) > 0f;
 
-        // A computer's displays in link order: monitors, and blocks another mod shows a canvas on (SurfaceAspect).
-        static List<Command> Linked(LuaComputer computer) =>
-            computer.Outputs.OfType<Command>().Where(c => c is CommandDisplay || Aspect(c) > 0f).ToList();
+        // A computer's displays in link order: monitors, and blocks another mod shows a canvas on (SurfaceAspect). A
+        // mainframe's go on with its terminals' displays (Mainframe.cs).
+        static List<Command> Linked(LuaComputer computer)
+        {
+            var list = computer.Outputs.OfType<Command>().Where(c => c is CommandDisplay || Aspect(c) > 0f).ToList();
+            if (computer is Mainframe m)
+                foreach (var terminal in Mainframes.Terminals(m))
+                    foreach (var c in terminal.Outputs.OfType<Command>())
+                        if ((c is CommandDisplay || Aspect(c) > 0f) && !list.Contains(c)) list.Add(c);
+            return list;
+        }
 
         // ---- For other mods: a canvas they show themselves ----
 
@@ -141,7 +149,7 @@ namespace EvoCore
             {
                 var d = pair.Value;
                 bool keep;
-                try { keep = d.Block.brickCoord.entity != null && Lua.Runs(d.Owner) && d.Owner.Outputs.Contains(d.Block) && (!d.External || Aspect(d.Block) > 0f); }
+                try { keep = d.Block.brickCoord.entity != null && Lua.Runs(d.Owner) && Linked(d.Owner).Contains(d.Block) && (!d.External || Aspect(d.Block) > 0f); }
                 catch { keep = false; }
                 if (!keep) Drop(pair.Key, d);
             }
