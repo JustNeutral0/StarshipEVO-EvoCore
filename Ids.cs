@@ -58,17 +58,26 @@ namespace EvoCore
                 Load();
                 if (registry.TryGetValue((space, key), out var known))
                 {
-                    known.ThisSession = true;
-                    if (known.Id != preferred)
-                        Note($"{space} {key} keeps id {known.Id} from the registry (the mod asked for {preferred})");
-                    return known.Id;
+                    // An id the game itself uses was never really ours: a save holding it holds the stock block, so
+                    // moving the claim loses nothing (EvoCore 0.9.82 put the Mainframe on the Round Tile's 501).
+                    if (!StockHolds(space, known.Id))
+                    {
+                        known.ThisSession = true;
+                        if (known.Id != preferred)
+                            Note($"{space} {key} keeps id {known.Id} from the registry (the mod asked for {preferred})");
+                        return known.Id;
+                    }
+                    Note($"{space} {key} had id {known.Id} in the registry, but the game uses it; moving it");
+                    registry.Remove((space, key));
                 }
                 var id = preferred;
                 var holder = Holder(space, id);
-                if (holder != null || id < 0 || id >= TableSize[space])
+                var stockHeld = StockHolds(space, id);
+                if (holder != null || stockHeld || id < 0 || id >= TableSize[space])
                 {
-                    id = Enumerable.Range(FirstModId[space], TableSize[space] - FirstModId[space]).First(i => Holder(space, i) == null && !StockHolds(space, i));
-                    Note($"{space} {key} wanted {preferred}, held by {holder ?? "nothing (out of range)"}; given {id}");
+                    id = Enumerable.Range(FirstModId[space], TableSize[space] - FirstModId[space]).First(i => Holder(space, i) == null && !StockHolds(space, i) &&
+                        !(space == IdSpace.Brick && i < Brick.BRICK_INDEX.Length && Brick.BRICK_INDEX[i] != null));
+                    Note($"{space} {key} wanted {preferred}, held by {holder ?? (stockHeld ? "the game" : "nothing (out of range)")}; given {id}");
                 }
                 registry[(space, key)] = new IdClaim { Space = space, Key = key, Id = id, Preferred = preferred, ThisSession = true };
                 Save();
@@ -78,8 +87,16 @@ namespace EvoCore
 
         static string Holder(IdSpace space, int id) => registry.Values.FirstOrDefault(c => c.Space == space && c.Id == id)?.Key;
 
-        static bool StockHolds(IdSpace space, int id) =>
-            space == IdSpace.Brick ? id < Brick.BRICK_INDEX.Length && Brick.BRICK_INDEX[id] != null : stock.TryGetValue(space, out var s) && s.Contains(id);
+        // A claim can come before the game has made all its bricks (a mod's static field), so the stock ids above the
+        // main block (0..338 in 26w45a) are listed too: Round Tile, Cone, Drill, Drill Head Frame.
+        static readonly int[] StockHighBricks = { 501, 502, 503, 504 };
+
+        static bool StockHolds(IdSpace space, int id)
+        {
+            if (space != IdSpace.Brick) return stock.TryGetValue(space, out var s) && s.Contains(id);
+            if (id <= 338 || Array.IndexOf(StockHighBricks, id) >= 0) return true;
+            return BrickMakers.TryGetValue(id, out var makers) && makers.Count > 0 && makers[0].owner == "game";
+        }
 
         // The stock table sizes. A claim above these only works while the tables are grown (see Limits).
         static readonly Dictionary<IdSpace, int> StockSize = new Dictionary<IdSpace, int>

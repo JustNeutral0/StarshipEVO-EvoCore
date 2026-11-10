@@ -170,8 +170,9 @@ namespace EvoCore
 
     static class MainframeBlocks
     {
-        public static readonly int MainframeId = Ids.Claim(IdSpace.Brick, "EvoCore.Mainframe", 501);
-        public static readonly int RackId = Ids.Claim(IdSpace.Brick, "EvoCore.ServerRack", 502);
+        // 501 and 502 until 0.9.84, which are the game's Round Tile and Cone: every stock one became a mainframe or rack.
+        public static readonly int MainframeId = Ids.Claim(IdSpace.Brick, "EvoCore.Mainframe", 512);
+        public static readonly int RackId = Ids.Claim(IdSpace.Brick, "EvoCore.ServerRack", 513);
 
         [HarmonyPatch(typeof(Brick), nameof(Brick.LoadAllResourcesRuntime))]
         static class Register
