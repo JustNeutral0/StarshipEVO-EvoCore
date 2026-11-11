@@ -836,7 +836,7 @@ namespace EvoCore
                 DrawCanvas(area);
                 if (coding != null)
                 {
-                    GUILayout.Label($"node {coding.Id}'s Lua: inputs.get(1) is in1, outputs.set(1, v) sets out1; tick(dt) and on_input(i, value) run each circuit tick. Its ports: inputs= and outputs= on the node.");
+                    GUILayout.Label($"node {coding.Id}'s Lua: inputs.get(1) is in1, outputs.set(1, v) sets out1; tick(dt) and on_input(i, value) run each circuit tick. Its ports: inputs= and outputs= on the node.", Wrapped());
                     var code = Lua.CodeView.Draw(coding.Script ?? "", ref codeScroll, CodeH, "EvoCoreGraphLua", codeError, out _);
                     if (code != (coding.Script ?? "")) coding.Script = code;
                 }
@@ -847,7 +847,7 @@ namespace EvoCore
                 if (hoverDoc != null)
                     GUILayout.Label("<color=#9fd8ff>" + hoverDoc + "</color>", Rich());
                 else if (picked.Count > 1)
-                    GUILayout.Label($"{picked.Count} nodes picked.  Drag a title: move them.  Ctrl+C copy, Ctrl+D duplicate, Ctrl+G comment box around them, Delete remove.");
+                    GUILayout.Label($"{picked.Count} nodes picked.  Drag a title: move them.  Ctrl+C copy, Ctrl+D duplicate, Ctrl+G comment box around them, Delete remove.", Wrapped());
                 else if (selected >= 0 && graph.Nodes.TryGetValue(selected, out var chipSel) && chipSel.Type.File != null && IsChipFile(chipSel.Type.File))
                 {
                     GUILayout.BeginHorizontal();
@@ -856,14 +856,14 @@ namespace EvoCore
                     GUILayout.EndHorizontal();
                 }
                 else if (selected >= 0 && graph.Nodes.TryGetValue(selected, out var sel))
-                    GUILayout.Label($"node {sel.Id}, {sel.Type.Name}: {sel.Type.Help}.");
+                    GUILayout.Label($"node {sel.Id}, {sel.Type.Name}: {sel.Type.Help}.", Wrapped());
                 else if (pickedComment != null)
-                    GUILayout.Label("Comment box: drag its title to move it with what's inside, its corner to resize; double-click the title to rename; Delete removes it.");
+                    GUILayout.Label("Comment box: drag its title to move it with what's inside, its corner to resize; double-click the title to rename; Delete removes it.", Wrapped());
                 else
-                    GUILayout.Label("Right-click: add.  Drag a right-edge pin to a left-edge pin: wire (blue number, green on/off, amber 0-1).  Drop a wire on empty space: new node.  Hover for help.  Ctrl+Z/Y, Ctrl+S.");
+                    GUILayout.Label("Right-click: add.  Drag a right-edge pin to a left-edge pin: wire (blue number, green on/off, amber 0-1).  Drop a wire on empty space: new node.  Hover for help.  Ctrl+Z/Y, Ctrl+S.", Wrapped());
                 if (picked.Count > 0 && !IsChipFile(file)) DrawMakeChip();
                 if (unpack >= 0) { Unpack(unpack); unpack = -1; }
-                if (message != "") GUILayout.Label(message);
+                if (message != "") GUILayout.Label(message, Wrapped());
                 var runs = Lua.StatusOf(file);
                 foreach (var line in runs) GUILayout.Label(line);
                 if (showLua)
@@ -2587,6 +2587,8 @@ namespace EvoCore
             }
 
             static GUIStyle rich;
+            static GUIStyle wrapped;
+            static GUIStyle Wrapped() => wrapped ?? (wrapped = new GUIStyle(GUI.skin.label) { wordWrap = true });
             static GUIStyle Rich() => rich ?? (rich = new GUIStyle(GUI.skin.label) { richText = true, wordWrap = true });
 
             static bool Same(string a, string b) =>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -174,7 +174,8 @@ namespace EvoCore
 
         // A linked block's plain value as `reader` sees it.
         internal static float StateOf(ICommand block, LuaComputer reader) =>
-            block is LuaComputer && sent.TryGetValue((block, reader), out var v) ? v : block.State;
+            block is LuaComputer && sent.TryGetValue((block, reader), out var v) ? v :
+            SourceLinks.Reading(block, out var gauge) ? gauge : block.State;
 
         // An input port's value: its block's state, or the readout it was set to read.
         internal static float ValueOf(ICommand block, PortLink link, LuaComputer reader)

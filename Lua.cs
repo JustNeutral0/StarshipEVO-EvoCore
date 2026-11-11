@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using MoonSharp.Interpreter;
 using UnityEngine;
@@ -65,6 +66,7 @@ namespace EvoCore
             public float Next;
             public string Status = "starting", Error;
             public readonly List<string> Output = new List<string>();
+            public readonly List<KeyValuePair<string, string>> Watched = new List<KeyValuePair<string, string>>();
             public double Ms;
             public readonly Dictionary<string, float> LastInputs = new Dictionary<string, float>();
             public bool InputsPrimed;
@@ -312,6 +314,7 @@ end
             {
                 script.Globals["inputs"] = new LinksApi(c, false);
                 script.Globals["outputs"] = new LinksApi(c, true);
+                script.Globals["watch"] = (Action<string, DynValue>)((label, value) => Watch(r, label, value));
             }
             foreach (var pair in modules)
             {
@@ -409,6 +412,39 @@ end
             var last = r.Output.Count > 0 ? "\n" + r.Output[r.Output.Count - 1] : "";
             var file = r.File != null ? Path.GetFileName(r.File) : r.Context.Name;
             return $"Lua: {file}, {r.Status}\n{computer.Inputs.Count} in, {computer.Outputs.Count} out{last}";
+        }
+
+        // watch(name, value): a named value shown in the game's info panel (top right) while the computer is picked
+        // with the link tool. Calling it again with the same name replaces the value; nil takes the line away.
+        const int MaxWatched = 16, MaxWatchedText = 60;
+
+        static void Watch(Running r, string label, DynValue value)
+        {
+            if (string.IsNullOrEmpty(label)) return;
+            label = Clip(label);
+            var at = r.Watched.FindIndex(w => w.Key == label);
+            if (value == null || value.IsNil()) { if (at >= 0) r.Watched.RemoveAt(at); return; }
+            var text = value.Type == DataType.Number ? value.Number.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                : value.Type == DataType.Boolean ? (value.Boolean ? "on" : "off") : Clip(value.ToPrintString());
+            var line = new KeyValuePair<string, string>(label, text);
+            if (at >= 0) r.Watched[at] = line;
+            else if (r.Watched.Count < MaxWatched) r.Watched.Add(line);
+        }
+
+        // Rich text tags would run on into the rest of the panel.
+        static string Clip(string s)
+        {
+            s = s.Replace("<", "").Replace(">", "").Replace("\n", " ").Replace("\r", "");
+            return s.Length > MaxWatchedText ? s.Substring(0, MaxWatchedText) + "..." : s;
+        }
+
+        // The info panel's lines for a computer: what its script watches, or null for none.
+        public static string WatchedText(LuaComputer computer)
+        {
+            if (!ready || !running.TryGetValue(computer, out var r) || r.Watched.Count == 0) return null;
+            var sb = new StringBuilder();
+            foreach (var w in r.Watched) sb.Append('\n').Append(w.Key).Append(": ").Append(w.Value);
+            return sb.ToString();
         }
 
         static void Print(Running r, string s)

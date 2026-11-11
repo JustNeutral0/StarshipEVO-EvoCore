@@ -122,6 +122,15 @@ namespace EvoCore
             public string State => $"S[{Node.Id}]";
             public string Setting(string name) => Node.Settings.TryGetValue(name, out var v) ? v : Node.Type.Settings[name];
             public string Num(string name) => Number(Setting(name), name);
+
+            // A setting that counts things (which link): a whole number from 1 up.
+            public string Whole(string name)
+            {
+                var raw = Setting(name);
+                if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) || d < 1 || d != Math.Floor(d))
+                    throw new GraphException($"line {Node.Line}: node {Node.Id} {name}={raw} has to be a whole number, 1 or more");
+                return Lit(d);
+            }
             public string Str(string name) => "\"" + Setting(name).Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
             string Number(string raw, string what)
@@ -171,9 +180,9 @@ namespace EvoCore
         static Graphs()
         {
             category = "Links";
-            Add("input", "the value of the computer's link in number `index`", None, e => $"{e.Out("out")} = inputs.get({e.Num("index")})", "index=1");
+            Add("input", "the value of the computer's link in number `index`", None, e => $"{e.Out("out")} = inputs.get({e.Whole("index")})", "index=1");
             Add("output", "sends its input down the computer's link out number `index` (only when it changes)", In1,
-                e => $"if {e.State}.sent ~= {e.In("in")} then {e.State}.sent = {e.In("in")}; outputs.set({e.Num("index")}, {e.In("in")}) end", "index=1");
+                e => $"if {e.State}.sent ~= {e.In("in")} then {e.State}.sent = {e.In("in")}; outputs.set({e.Whole("index")}, {e.In("in")}) end", "index=1");
             Types["output"].Outs = None;
             Add("constant", "always `value`", None, e => $"{e.Out("out")} = {e.Num("value")}", "value=0");
 

@@ -198,6 +198,24 @@ namespace EvoCore
         public override string OverText => Mainframes.TerminalOf(this) is Mainframe m ? Mainframes.TerminalStatus(m) : Lua.ComputerStatus(this);
         public override string OverTextIndirect => "Lua Computer";
 
+        // The game's info panel (top right, while the block is picked with the link tool) prints a gizmo's labelled
+        // properties; one text property with no label of its own carries the script's watch() lines.
+        public class WatchGizmo
+        {
+            [UI.CommandInfoProperty("", "", false)]
+            public string watched { get; set; }
+        }
+
+        static readonly WatchGizmo watchGizmo = new WatchGizmo();
+
+        public override object GetGizmo(UnityEngine.Rendering.CommandBuffer commandBuffer)
+        {
+            var text = Lua.WatchedText(this);
+            if (text == null) return null;
+            watchGizmo.watched = text;
+            return watchGizmo;
+        }
+
         // The script's name: the block's Tag-tool label, or DefaultScript ("computer"; a Mainframe's is "mainframe").
         public string ScriptName
         {

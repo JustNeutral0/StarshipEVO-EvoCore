@@ -26,6 +26,8 @@ end
 function tick(dt)
   local lamp = ship.block('rig lamp')
   if lamp then lamp.on = not inputs.on(1) end
+  watch('switch', inputs.on(1))
+  watch('panel', inputs.get(2))
 end
 local sw, light = inputs.block(1), outputs.block(1)
 print('linked: ' .. (sw and sw.type or 'nil') .. ' -> ' .. (light and light.type or 'nil'))
@@ -50,13 +52,14 @@ end
             rig = player.NetworkSetup.ServerCreateEntity(Hull(0), new WorldTransform(origin, rotation), EntityType.spaceship);
             if (rig == null) return "the game didn't create an entity (not the server?)";
             rig.EntityName = rig.name = Name;
-            for (int x = -2; x <= 2; x++) if (x != 0) Put(Hull(x));
+            for (int x = -2; x <= 3; x++) if (x != 0) Put(Hull(x));
             // Parts stand on the slab's top face (16 = half a metre in 1/32 m units), along their up.
             Put(Part(TabLogic.SWITCH_BUTTON, -64));
             Put(Part(Brick.BRICK_INDEX[LuaComputerBlock.BrickId], -32));
             Put(Part(TabInterior.LIGHT_FLAT, 0));
             Put(Part(TabInterior.LIGHT_FLAT, 32));
             Put(Part(TabLogic.SCREEN_TEXT_INPUT, 64));
+            Put(Part(TabSystem.SOLAR_PANEL_FLAT, 96));   // links in only through SourceLinks
             System.IO.File.WriteAllText(System.IO.Path.Combine(Lua.ScriptsDir, Label + ".lua"), Script);
             return $"built {Name} {ahead} m ahead; call Wire() in a few seconds";
 
@@ -76,6 +79,7 @@ end
             var report = found;
             report += "; switch->computer " + Link(sw, computer);
             report += "; computer->light " + Link(computer, light);
+            report += "; panel->computer " + (At(96) is ICommand panel ? Link(panel, computer) : "no panel");
             rig.BrickCount.SetTag(computer.brickCoord, Label);
             rig.BrickCount.SetTag(lamp.brickCoord, LampLabel);
             if (screen is CommandInputText text) text.SetData(new CommandInputText.InputTextData { text = "[lua: status]", fontSize = 12f });
@@ -92,6 +96,14 @@ end
             return "ok";
         }
 
+        // Puts the computer in the game's info panel (top right), as picking it with the link tool does.
+        public static string ShowInfo()
+        {
+            if (!(At(-32) is UI.IBrickGizmoDisplayable computer)) return "no computer";
+            UI.UI_BrickGizmoDisplay.SetNewGizmoDisplayable(computer);
+            return "shown";
+        }
+
         public static string Press(float value)
         {
             var sw = At(-64);
@@ -106,7 +118,8 @@ end
             ICommand sw = At(-64), computer = At(-32), light = At(0), lamp = At(32);
             string s(ICommand c) => c == null ? "missing" : c.State.ToString("0.##");
             var status = computer is LuaComputer lc ? Lua.ComputerStatus(lc).Replace("\n", " | ") : "no computer";
-            return $"switch {s(sw)}, light {s(light)}, lamp {s(lamp)}; computer: {status}";
+            var watched = computer is LuaComputer w ? (Lua.WatchedText(w) ?? "").Replace("\n", " | ") : "";
+            return $"switch {s(sw)}, light {s(light)}, lamp {s(lamp)}; computer: {status}; watched:{watched}";
         }
 
         // Readouts (Readouts.cs) of every logic block on ships within `range` metres of the camera: per ship, each
