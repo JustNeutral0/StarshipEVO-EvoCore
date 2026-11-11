@@ -36,7 +36,7 @@ namespace EvoCore
             GUILayout.Label($"Ports of {c.ScriptName}: which linked block is in which port. Saved in the computer, so they don't depend on link order.", dim);
             if (d == null || !d.Any)
                 GUILayout.Label("This program declares no ports yet. In Lua: ports.declare{ inputs = {\"throttle\"}, outputs = {\"lights\"}, displays = {\"hud\"}, channels = {\"nav\"} }. " +
-                                "In a graph, port in, port out, send and receive nodes declare theirs.", dim);
+                                "In a circuit, port in, port out, send and receive nodes declare theirs.", dim);
             scroll = GUILayout.BeginScrollView(scroll, GUILayout.Height(height));
             GUILayout.BeginHorizontal();
             Column(c, "INPUTS", "in", d?.Inputs ?? new List<string>(), c.Inputs);

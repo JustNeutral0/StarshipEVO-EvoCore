@@ -1,0 +1,3 @@
+# {name}.circuit
+rate 0.1
+comment at=0,0 size=460,110 text="Right-click empty space to add a node. Drag from a pin on a node's right edge to a pin on another's left edge to wire them. Ctrl+S saves."

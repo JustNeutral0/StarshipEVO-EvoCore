@@ -98,7 +98,13 @@ namespace EvoCore
                 ExposeControls();
                 ExposePlayer();
                 Mainframes.Expose();
+                Buses.Expose();
+                Apps.Expose();
+                Media.Expose();
+                ExposeUpgrades();
+                BoardStore.Init();
                 Directory.CreateDirectory(ScriptsDir);
+                Graphs.AdoptOld();   // before the stock files, so a renamed stock template isn't written twice
                 WriteStockLibs();
                 var example = Path.Combine(ScriptsDir, "example.lua");
                 if (!System.IO.File.Exists(example)) System.IO.File.WriteAllText(example, Example);
@@ -189,6 +195,7 @@ end
             if (Time.unscaledTime >= nextScan)
             {
                 nextScan = Time.unscaledTime + 1f;
+                Graphs.AdoptOld();
                 try { Scan(); }
                 catch (Exception e) { Core.Log.Error("Lua scan failed: " + e); }
             }
@@ -215,7 +222,10 @@ end
                     if (mainframe.Unpowered) { r.Next = Time.unscaledTime + 0.5f; continue; }
                     interval *= Mathf.Max(1f, mainframe.Load);
                 }
-                var dt = Time.unscaledTime - (r.Next - interval);
+                // Clock chips on its board (Parts.cs) make it tick faster.
+                if (r.Context.Host is LuaComputer clocked) interval = Mathf.Max(0.02f, interval / Parts.Speed(clocked));
+                // The first tick gets one interval, not the time since the game started.
+                var dt = r.Next <= 0f ? interval : Time.unscaledTime - (r.Next - interval);
                 r.Next = Time.unscaledTime + interval;
                 if (tick.Type != DataType.Function) continue;
                 Call(r, tick, DynValue.NewNumber(Mathf.Max(0f, dt)));
@@ -240,8 +250,9 @@ end
                 string file = null, source = null;
                 if (host is LuaComputer computer)
                 {
-                    // A terminal runs nothing itself: its mainframe draws on its monitors (Mainframe.cs).
-                    if (Mainframes.TerminalOf(computer) != null) continue;
+                    // A terminal runs nothing itself: its mainframe draws on its monitors (Mainframe.cs). Expansion
+                    // Slots and PC Workstations (Expansion.cs) never run a program.
+                    if (Mainframes.TerminalOf(computer) != null || computer is ExpansionSlot || computer is Workstation || computer is SalvageProcessor) continue;
                     if (computer.HasProgram)
                     {
                         // Its own program (ComputerPrograms.cs), through its working file.
@@ -252,7 +263,7 @@ end
                     else
                     {
                         // A node graph (Graphs.cs) wins over a script of the same name.
-                        var graph = Path.Combine(ScriptsDir, computer.ScriptName + ".graph");
+                        var graph = Path.Combine(ScriptsDir, computer.ScriptName + ".circuit");
                         file = System.IO.File.Exists(graph) ? graph : Path.Combine(ScriptsDir, computer.ScriptName + ".lua");
                     }
                 }
@@ -268,7 +279,7 @@ end
                 seen.Add(host);
                 var time = file != null && System.IO.File.Exists(file) ? System.IO.File.GetLastWriteTimeUtc(file) : default;
                 running.TryGetValue(host, out var r);
-                var stale = r != null && file != null && file.EndsWith(".graph", StringComparison.OrdinalIgnoreCase) && r.NodeVersion != Graphs.Version || r != null && r.LibVersion != libVersion;
+                var stale = r != null && file != null && file.EndsWith(".circuit", StringComparison.OrdinalIgnoreCase) && r.NodeVersion != Graphs.Version || r != null && r.LibVersion != libVersion;
                 if (r != null && r.File == file && r.Source == source && r.FileTime == time && !stale) continue;
                 if (r != null) Stop(host, r);
                 Start(host, file, source, time);
@@ -287,10 +298,10 @@ end
             running[host] = r;
             if (file != null && !System.IO.File.Exists(file)) { r.Status = "no such file: " + file; return; }
             var code = file != null ? System.IO.File.ReadAllText(file) : source;
-            if (file != null && file.EndsWith(".graph", StringComparison.OrdinalIgnoreCase))
+            if (file != null && file.EndsWith(".circuit", StringComparison.OrdinalIgnoreCase))
             {
                 try { code = Graphs.Compile(code, name); }
-                catch (Graphs.GraphException e) { r.Error = e.Message; r.Status = "graph error: " + e.Message; return; }
+                catch (Graphs.GraphException e) { r.Error = e.Message; r.Status = "circuit error: " + e.Message; return; }
             }
             var script = new Script(CoreModules.Preset_SoftSandbox);
             script.Options.DebugPrint = s => Print(r, s);
@@ -592,19 +603,23 @@ end
 
         internal static void RescanSoon() => nextScan = 0f;
 
-        // The stock lib files and scripts (embedded from _ModDev\EvoCore\lib and scripts) are written when missing,
-        // never over edits.
+        // The stock lib files, scripts, graph nodes and apps (embedded from _ModDev\EvoCore\lib, scripts, nodes and apps) are
+        // written when missing, never over edits.
         static void WriteStockLibs()
         {
             WriteStock("EvoCore.lib.", LibDir);
             WriteStock("EvoCore.scripts.", ScriptsDir);
+            WriteStock("EvoCore.nodes.", Graphs.NodesDir);
+            WriteStock("EvoCore.templates.", Graphs.TemplatesDir, ".circuit");
+            WriteStock("EvoCore.apps.", Apps.Dir);
+            WriteStock("EvoCore.apps.", Apps.Dir, ".circuit");
         }
 
-        static void WriteStock(string prefix, string dir)
+        static void WriteStock(string prefix, string dir, string extension = ".lua")
         {
             Directory.CreateDirectory(dir);
             var asm = typeof(Lua).Assembly;
-            foreach (var res in asm.GetManifestResourceNames().Where(n => n.StartsWith(prefix) && n.EndsWith(".lua")))
+            foreach (var res in asm.GetManifestResourceNames().Where(n => n.StartsWith(prefix) && n.EndsWith(extension)))
             {
                 var path = Path.Combine(dir, res.Substring(prefix.Length));
                 if (System.IO.File.Exists(path)) continue;
@@ -662,7 +677,7 @@ end
             GUILayout.Label("Folder: " + ScriptsDir);
             GUILayout.BeginHorizontal();
             if (GUILayout.Toggle(!graphMode, "Scripts", GUI.skin.button, GUILayout.Width(100))) graphMode = false;
-            if (GUILayout.Toggle(graphMode, "Graphs", GUI.skin.button, GUILayout.Width(100))) graphMode = true;
+            if (GUILayout.Toggle(graphMode, "Circuits", GUI.skin.button, GUILayout.Width(100))) graphMode = true;
             GUILayout.EndHorizontal();
             if (graphMode) Graphs.Canvas.DrawLauncher();
             else DrawScriptEditor();

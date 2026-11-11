@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Manager;
+using MoonSharp.Interpreter;
 using UnityEngine;
 
 namespace EvoCore
@@ -27,7 +28,7 @@ namespace EvoCore
         internal static string MirrorPath(LuaComputer c)
         {
             var name = new string(c.ScriptName.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch).ToArray());
-            return Path.Combine(ComputersDir, $"{name} {c.ProgramId}{(c.ProgramKind == "graph" ? ".graph" : ".lua")}");
+            return Path.Combine(ComputersDir, $"{name} {c.ProgramId}{(c.ProgramKind == "graph" ? ".circuit" : ".lua")}");
         }
 
         internal static bool IsMirror(string path) =>
@@ -63,6 +64,19 @@ namespace EvoCore
             ids[c.ProgramId] = c;
         }
 
+        // A new computer's program: output 1 follows input 1, output 2 input 2, with a hint.
+        const string StarterGraph =
+@"# This computer's program. Output 1 follows input 1 and output 2 follows input 2.
+rate 0.1
+comment at=0,-70 size=520,50 text=""Link switches into the computer and lights out of it. Right-click empty space to add a node; Ctrl+S saves.""
+node 1 input index=1 at=0,0
+node 2 output index=1 at=240,0
+node 3 input index=2 at=0,100
+node 4 output index=2 at=240,100
+wire 1.out 2.in
+wire 3.out 4.in
+";
+
         // The activate key on a computer: stores the program it runs now in it (first time), opens the editor on it.
         internal static void OpenComputer(LuaComputer c)
         {
@@ -70,13 +84,13 @@ namespace EvoCore
             {
                 if (!c.HasProgram)
                 {
-                    var graph = Path.Combine(ScriptsDir, c.ScriptName + ".graph");
+                    // Graphs first: a computer gets its label's graph, else its label's Lua script (but not the stock
+                    // computer.lua, which nobody picked), else the starter graph.
+                    var graph = Path.Combine(ScriptsDir, c.ScriptName + ".circuit");
                     var lua = Path.Combine(ScriptsDir, c.ScriptName + ".lua");
-                    var fallback = Path.Combine(ScriptsDir, "computer.lua");
                     if (File.Exists(graph)) c.SetProgram("graph", File.ReadAllText(graph).Replace("\r\n", "\n"));
-                    else if (File.Exists(lua)) c.SetProgram("lua", File.ReadAllText(lua).Replace("\r\n", "\n"));
-                    else if (File.Exists(fallback)) c.SetProgram("lua", File.ReadAllText(fallback).Replace("\r\n", "\n"));
-                    else c.SetProgram("lua", "-- This computer's program.\nfunction on_input(i, value)\n  outputs.set(i, value)\nend\n");
+                    else if (c.ScriptName != "computer" && File.Exists(lua)) c.SetProgram("lua", File.ReadAllText(lua).Replace("\r\n", "\n"));
+                    else c.SetProgram("graph", StarterGraph.Replace("\r", ""));
                 }
                 ClaimId(c);
                 Attached = c;
@@ -89,7 +103,7 @@ namespace EvoCore
         // Opens a graph or Lua file on the Computer screen's matching tab.
         internal static void OpenPath(string path)
         {
-            if (path.EndsWith(".graph", StringComparison.OrdinalIgnoreCase))
+            if (path.EndsWith(".circuit", StringComparison.OrdinalIgnoreCase))
             {
                 Graphs.Canvas.Open(path);
                 Graphs.Canvas.ShowGraph();
@@ -110,21 +124,55 @@ namespace EvoCore
         internal static void ComputerButtons(string openFile)
         {
             var c = AttachedNow;
-            if (c == null || openFile == null) return;
+            if (c == null || openFile == null || Graphs.IsChipFile(openFile)) return;   // a chip goes on boards, not computers
             if (c.HasProgram && SamePath(openFile, MirrorPath(c)))
             {
                 GUILayout.Label("on this computer", GUILayout.Width(120));
                 if (GUILayout.Button("Copy to scripts", GUILayout.Width(130))) programMessage = Export(c);
                 if (programMessage != "") GUILayout.Label(programMessage, GUILayout.Width(280));
             }
-            else if (!IsMirror(openFile) && GUILayout.Button("Put on computer", GUILayout.Width(140)))
+            else if (!IsMirror(openFile) && GUILayout.Button("Put on computer", GUILayout.Width(140))) PutOnComputer(openFile);
+        }
+
+        // Makes a scripts\ file the attached computer's program and opens the computer's copy. Returns what happened.
+        internal static string PutOnComputer(string openFile)
+        {
+            var c = AttachedNow;
+            if (c == null) return "Open a Lua Computer first: aim at it and press the use key.";
+            var kind = openFile.EndsWith(".circuit", StringComparison.OrdinalIgnoreCase) ? "graph" : "lua";
+            c.SetProgram(kind, File.ReadAllText(openFile).Replace("\r\n", "\n"));
+            OpenPath(Mirror(c));
+            nextScan = 0f;
+            return programMessage = $"{Path.GetFileName(openFile)} is now this computer's program.";
+        }
+
+        // The computer that was opened (aimed at and used), if it's still there.
+        internal static LuaComputer AttachedComputer => AttachedNow;
+
+        // The computer running a graph or script file: the opened computer when the file is its own program, else any
+        // computer running it. Null when nothing runs it.
+        internal static LuaComputer RunnerOf(string file)
+        {
+            if (file == null) return null;
+            var a = AttachedNow;
+            if (a != null && a.HasProgram && SamePath(file, MirrorPath(a))) return a;
+            foreach (var pair in running)
+                if (pair.Key is LuaComputer c && pair.Value.File != null && SamePath(pair.Value.File, file)) return c;
+            return null;
+        }
+
+        // What a computer's link (by number, or a port name) goes to, or null when nothing is there.
+        internal static string LinkName(LuaComputer c, bool outgoing, string which)
+        {
+            if (c == null || string.IsNullOrEmpty(which)) return null;
+            var v = double.TryParse(which, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var n)
+                ? DynValue.NewNumber(n) : DynValue.NewString(which);
+            try
             {
-                var kind = openFile.EndsWith(".graph", StringComparison.OrdinalIgnoreCase) ? "graph" : "lua";
-                c.SetProgram(kind, File.ReadAllText(openFile).Replace("\r\n", "\n"));
-                OpenPath(Mirror(c));
-                nextScan = 0f;
-                programMessage = $"{Path.GetFileName(openFile)} is now this computer's program.";
+                var target = Resolve(c, outgoing, v, out _);
+                return target != null ? Describe(target) : null;
             }
+            catch { return null; }
         }
 
         // Delete for the Graph, Script and Nodes editors: asks first, then moves the file into a "deleted" folder beside
@@ -193,7 +241,7 @@ namespace EvoCore
             var c = ByLabel(label, programId);
             var path = Path.Combine(ScriptsDir, file);
             if (c == null || !File.Exists(path)) return "no such computer or file";
-            c.SetProgram(file.EndsWith(".graph", StringComparison.OrdinalIgnoreCase) ? "graph" : "lua", File.ReadAllText(path).Replace("\r\n", "\n"));
+            c.SetProgram(file.EndsWith(".circuit", StringComparison.OrdinalIgnoreCase) ? "graph" : "lua", File.ReadAllText(path).Replace("\r\n", "\n"));
             Mirror(c);
             nextScan = 0f;
             return $"{file} is now on {label} {c.ProgramId}";
@@ -284,7 +332,7 @@ end
             if (c == null || !c.HasProgram) return;
             var path = MirrorPath(c);
             var isGraph = c.ProgramKind == "graph";
-            if (GUILayout.Button((SamePath(path, openFile) ? "> " : "") + "This computer" + (isGraph ? " (graph)" : " (Lua)"), GUI.skin.label))
+            if (GUILayout.Button((SamePath(path, openFile) ? "> " : "") + "This computer" + (isGraph ? " (circuit)" : " (Lua)"), GUI.skin.label))
                 OpenPath(Mirror(c));
             // The ship's logic tools (work in progress), folded away so they don't crowd the file list; an undoable refit
             // keeps them open so its undo stays in sight.
@@ -313,7 +361,7 @@ end
                 }
                 else
                 {
-                    GUILayout.Label("Run the ship's gates and timers as a graph here? It tests first: if every output matches, the old ones are removed (no undo); if not, they stay and Undo works.", GUILayout.Width(160));
+                    GUILayout.Label("Run the ship's gates and timers as a circuit here? It tests first: if every output matches, the old ones are removed (no undo); if not, they stay and Undo works.", GUILayout.Width(160));
                     GUILayout.BeginHorizontal(GUILayout.Width(160));
                     if (GUILayout.Button("Yes", GUILayout.Width(70)))
                     {
@@ -341,10 +389,10 @@ end
             if (!graphTab || isGraph) { confirmGraph = false; return; }
             if (!confirmGraph)
             {
-                if (GUILayout.Button("Make it a graph", GUILayout.Width(150))) confirmGraph = true;
+                if (GUILayout.Button("Make it a circuit", GUILayout.Width(150))) confirmGraph = true;
                 return;
             }
-            GUILayout.Label("Put its Lua into a lua node inside a new graph, wired to its links? It keeps running as it is.", GUILayout.Width(160));
+            GUILayout.Label("Put its Lua into a lua node inside a new circuit, wired to its links? It keeps running as it is.", GUILayout.Width(160));
             GUILayout.BeginHorizontal(GUILayout.Width(160));
             if (GUILayout.Button("Yes", GUILayout.Width(70)))
             {
@@ -355,7 +403,7 @@ end
                 wrapped[c] = lua;
                 OpenPath(Mirror(c));
                 nextScan = 0f;
-                programMessage = "Now a graph: its Lua is in the lua node (click it to see the code). " + copied;
+                programMessage = "Now a circuit: its Lua is in the lua node (click it to see the code). " + copied;
             }
             if (GUILayout.Button("No", GUILayout.Width(70))) confirmGraph = false;
             GUILayout.EndHorizontal();
@@ -430,7 +478,7 @@ end
 
         static string Export(LuaComputer c)
         {
-            var ext = c.ProgramKind == "graph" ? ".graph" : ".lua";
+            var ext = c.ProgramKind == "graph" ? ".circuit" : ".lua";
             var path = Path.Combine(ScriptsDir, c.ScriptName + ext);
             for (int n = 2; File.Exists(path); n++) path = Path.Combine(ScriptsDir, $"{c.ScriptName} {n}{ext}");
             File.WriteAllText(path, c.Program);

@@ -187,7 +187,7 @@ namespace EvoCore
 
         // ---- Messages between scripts: copied as plain values, so no table is shared between two Lua states ----
 
-        static object Plain(DynValue v, ref int budget, int depth = 0)
+        internal static object Plain(DynValue v, ref int budget, int depth = 0)
         {
             if (--budget < 0) return null;
             switch (v.Type)
@@ -209,7 +209,7 @@ namespace EvoCore
             }
         }
 
-        static DynValue ToLua(object o, Script s)
+        internal static DynValue ToLua(object o, Script s)
         {
             switch (o)
             {

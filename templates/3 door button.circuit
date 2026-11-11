@@ -1,0 +1,8 @@
+# {name}.circuit: a touch button on the monitor opens and closes a door.
+rate 0.1
+comment at=-10,-60 size=640,50 text="Link the computer to a door; in the window that pops up, pick the port door."
+node 1 button label=DOOR mode=toggle x=20 y=20 w=110 h=34
+node 2 port out port=door
+node 3 lamp label=OPEN x=150 y=37
+wire 1.on 2.in
+wire 1.on 3.value

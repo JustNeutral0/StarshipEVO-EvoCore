@@ -50,6 +50,47 @@ namespace EvoCore
             public string Source, File;   // Lua-written nodes (NodeLibrary.cs): the node file's code and path
             // Ports that depend on the node's own settings (the lua node's inputs=/outputs=); null: the type's Ins/Outs.
             public Func<Node, string[]> InsOf, OutsOf;
+            // Lua-written nodes: port kind ("inputs", "outputs", "channels", "displays") -> the setting holding a port
+            // name the graph declares (NodeLibrary.cs).
+            public Dictionary<string, string> Declares;
+            // Settings picked from a list on the canvas, by setting name; {"0", "1"} shows as an on/off flip.
+            public Dictionary<string, string[]> Choices;
+            // What each port carries (PortKind): by port name; KindOf for ports whose kind depends on a setting.
+            public Dictionary<string, string> Kinds;
+            public Func<Node, string, string> KindOf;
+            // Inputs most graphs leave alone (a display's hide, a counter's reset): the canvas keeps them out of the
+            // way until they're used. Null: none.
+            public HashSet<string> Optional;
+            // Chips (NodeLibrary.cs): the Lua-written nodes and chips inside it, and the ports its insides declare.
+            public List<NodeType> Uses;
+            public Dictionary<string, List<string>> ChipPorts;
+        }
+
+        // What travels down a wire. Everything is a float today; the kinds say what it means, so the canvas can show
+        // it and, once text, feeds and audio exist, refuse a wire that doesn't fit.
+        //   number   any number          onoff   1 or 0 (above 0.5 counts as on)          level   0 to 1
+        public static readonly string[] FloatKinds = { "number", "onoff", "level" };
+
+        public static string PortKind(Node n, string port)
+        {
+            var k = n.Type.KindOf?.Invoke(n, port);
+            if (k != null) return k;
+            return n.Type.Kinds != null && n.Type.Kinds.TryGetValue(port, out var kind) ? kind : "number";
+        }
+
+        // Whether a wire may join these kinds: any two float kinds (they convert), else only the same kind.
+        public static bool Fits(string from, string to) => from == to || FloatKinds.Contains(from) && FloatKinds.Contains(to);
+
+        // A kind said in words, for hover help.
+        public static string KindWords(string kind)
+        {
+            switch (kind)
+            {
+                case "onoff": return "on/off (1 or 0)";
+                case "level": return "level (0 to 1)";
+                case "number": return "number";
+                default: return kind;
+            }
         }
 
         public class Node
@@ -118,6 +159,14 @@ namespace EvoCore
         };
         static readonly string[] shipNumbers = { "speed", "mass", "fuel", "power", "heat", "hull", "shield", "altitude", "power_in", "power_use" };
         static readonly string[] shipFlags = { "stalled", "shield_on", "warping", "cruising" };
+        static readonly string[] shipLevels = { "fuel", "power", "heat", "hull", "shield" };   // 0 to 1
+
+        // A node's setting, or its type's default.
+        static string SettingOr(Node n, string key) =>
+            n.Settings.TryGetValue(key, out var v) && v != "" ? v : n.Type.Settings.TryGetValue(key, out var d) ? d : "";
+
+        // A setting's text as a port name, or "out" when it can't be one.
+        static string PortName(string s) => Regex.IsMatch(s ?? "", @"^[A-Za-z_][\w\-]*$") ? s.ToLowerInvariant() : "out";
 
         static Graphs()
         {
@@ -208,8 +257,8 @@ namespace EvoCore
             Add("ship", "one of the ship's values: " + string.Join(", ", shipNumbers.Concat(shipFlags).ToArray()), None, e =>
             {
                 var v = e.Setting("value");
-                if (shipNumbers.Contains(v)) return $"{e.Out("out")} = ship.{v}";
-                if (shipFlags.Contains(v)) return $"{e.Out("out")} = n(ship.{v})";
+                if (shipNumbers.Contains(v)) return $"{e.Out(e.Node.Outs[0])} = ship.{v}";
+                if (shipFlags.Contains(v)) return $"{e.Out(e.Node.Outs[0])} = n(ship.{v})";
                 throw new GraphException($"line {e.Node.Line}: node {e.Node.Id} ship value={v} isn't one of {string.Join(", ", shipNumbers.Concat(shipFlags).ToArray())}");
             }, "value=speed");
             Add("block", "a block found by its Tag label: its state, or the readout named by `value`; 0 if it's not there", None, e =>
@@ -226,19 +275,21 @@ namespace EvoCore
             // Keyboard and joysticks (Controls.cs).
             category = "Controls";
             Add("key", "1 while the key `key` is held (nothing counts while a menu is open)", None,
-                e => $"{e.Out("out")} = n(keys.down({e.Str("key")}))", "key=space");
+                e => $"{e.Out("held")} = n(keys.down({e.Str("key")}))", "key=space");
+            Types["key"].Outs = new[] { "held" };
             Add("joystick axis", "axis `axis` of joystick `stick`, -1 to 1", None,
                 e => $"{e.Out("out")} = joystick.axis({e.Num("stick")}, {e.Num("axis")})", "stick=1", "axis=1");
             Add("player look", "where you're looking, in degrees from the ship's forward (yaw + right, pitch + up), and whether you're seated in this ship", None,
                 e => $"do local y, p = player.look(); {e.Out("yaw")} = y; {e.Out("pitch")} = p; {e.Out("seated")} = n(player.seated) end");
             Types["player look"].Outs = new[] { "yaw", "pitch", "seated" };
             Add("joystick button", "1 while button `button` of joystick `stick` is held", None,
-                e => $"{e.Out("out")} = n(joystick.button({e.Num("stick")}, {e.Num("button")}))", "stick=1", "button=1");
+                e => $"{e.Out("held")} = n(joystick.button({e.Num("stick")}, {e.Num("button")}))", "stick=1", "button=1");
+            Types["joystick button"].Outs = new[] { "held" };
 
             // Named ports (Ports.cs): the graph declares every port these nodes use.
             category = "Links";
             Add("port in", "the value of the computer's input port `port` (link a block into the port with the link tool or the Links tab)", None,
-                e => $"{e.Out("out")} = inputs.get({e.Str("port")})", "port");
+                e => $"{e.Out(e.Node.Outs[0])} = inputs.get({e.Str("port")})", "port");
             Add("port out", "sends its input out of the computer's output port `port` (only when it changes)", In1,
                 e => $"if {e.State}.sent ~= {e.In("in")} then {e.State}.sent = {e.In("in")}; outputs.set({e.Str("port")}, {e.In("in")}) end", "port");
             Types["port out"].Outs = None;
@@ -246,10 +297,26 @@ namespace EvoCore
                 e => $"if {e.State}.sent ~= {e.In("in")} then {e.State}.sent = {e.In("in")}; ports.send({e.Str("port")}, {e.In("in")}) end", "port");
             Types["send"].Outs = None;
             Add("receive", "the last number that came in on channel `port` (0 until one does)", None,
-                e => $"{e.Out("out")} = num(ports.last({e.Str("port")}))", "port");
+                e => $"{e.Out(e.Node.Outs[0])} = num(ports.last({e.Str("port")}))", "port");
+
+            // A chip's pins (NodeLibrary.cs): only inside a chip, a .graph in the nodes folder that packs nodes into one.
+            category = "Chip";
+            Add("chip in", "one of the chip's input pins: gives what's wired into that pin from outside the chip", None,
+                e => $"{e.Out(e.Node.Outs[0])} = num(I[{LuaString(e.Node.Outs[0])}])", "name=in", "kind=number");
+            Types["chip in"].OutsOf = n => new[] { PortName(SettingOr(n, "name")) };
+            Types["chip in"].KindOf = (n, p) => FloatKinds.Contains(SettingOr(n, "kind")) ? SettingOr(n, "kind") : "number";
+            Add("chip out", "one of the chip's output pins: sends what's wired in out of that pin", new[] { "in" },
+                e => $"O[{LuaString(e.Node.Ins[0])}] = {e.In(e.Node.Ins[0])}", "name=out", "kind=number");
+            Types["chip out"].Outs = None;
+            Types["chip out"].InsOf = n => new[] { PortName(SettingOr(n, "name")) };
+            Types["chip out"].KindOf = (n, p) => FloatKinds.Contains(SettingOr(n, "kind")) ? SettingOr(n, "kind") : "number";
+            Add("chip setting", "a setting of the chip: each chip on a board has its own value for it, typed into the chip node",
+                None, e => $"{e.Out(e.Node.Outs[0])} = num(s[{LuaString(e.Node.Outs[0])}])", "name=setting", "value=0", "kind=number");
+            Types["chip setting"].OutsOf = n => new[] { PortName(SettingOr(n, "name")) };
+            Types["chip setting"].KindOf = (n, p) => FloatKinds.Contains(SettingOr(n, "kind")) ? SettingOr(n, "kind") : "number";
 
             category = "Script";
-            Add("lua", "runs a piece of Lua inside the graph, like a little computer of its own: its inputs in1, in2... are " +
+            Add("lua", "runs a piece of Lua inside the circuit, like a little computer of its own: its inputs in1, in2... are " +
                        "inputs.get(1), inputs.get(2)..., and outputs.set(1, v) sets out1; tick(dt) and on_input(i, value) work as in a " +
                        "script, and so do ship, display, anim and the rest. Select it to edit its code", None, LuaNodeTick, "inputs=1", "outputs=1");
             Types["lua"].Outs = None;
@@ -288,6 +355,57 @@ namespace EvoCore
             Doc("delay", "in", "the signal", "mode", "none, repeat or toggle (the game's timer gate modes)", "seconds", "the delay or repeat time (at least 0.1)", "out", "the delayed signal, the pulses, or the blinking");
             Doc("lua", "inputs", "how many inputs (in1, in2...; up to 16); the code reads in1 as inputs.get(1)",
                 "outputs", "how many outputs (out1, out2...); the code sets out1 with outputs.set(1, value)");
+
+            // Settings picked from a list on the canvas.
+            void Choose(string type, string setting, params string[] items)
+            {
+                if (Types[type].Choices == null) Types[type].Choices = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+                Types[type].Choices[setting] = items;
+            }
+            Choose("ship", "value", shipNumbers.Concat(shipFlags).ToArray());
+            Choose("compare", "op", "<", ">", "<=", ">=", "=", "!=");
+            Choose("gate", "op", "OR", "AND", "XOR", "NOR", "NAND", "XNOR", "LATEST");
+            Choose("delay", "mode", "none", "repeat", "toggle");
+            Choose("timer", "mode", "on", "off");
+            Choose("chip in", "kind", FloatKinds);
+            Choose("chip out", "kind", FloatKinds);
+            Choose("chip setting", "kind", FloatKinds);
+
+            // What each port carries (unlisted ports are numbers).
+            void Kind(string kind, string type, params string[] ports)
+            {
+                if (Types[type].Kinds == null) Types[type].Kinds = new Dictionary<string, string>();
+                foreach (var p in ports) Types[type].Kinds[p] = kind;
+            }
+            foreach (var t in new[] { "and", "or", "xor" }) Kind("onoff", t, "a", "b", "out");
+            Kind("onoff", "not", "a", "out");
+            Kind("onoff", "compare", "out");
+            Kind("onoff", "switch", "if");
+            Kind("onoff", "timer", "in", "out");
+            Kind("onoff", "pulse", "in", "out");
+            Kind("onoff", "toggle", "in", "out");
+            Kind("onoff", "latch", "set", "reset", "out");
+            Kind("onoff", "counter", "up", "reset");
+            Types["counter"].Optional = new HashSet<string> { "reset" };
+            Kind("onoff", "key", "held");
+            Kind("onoff", "joystick button", "held");
+            Kind("onoff", "player look", "seated");
+            Kind("level", "input", "out");
+            Kind("level", "output", "in");
+            Kind("level", "port out", "in");
+            Kind("level", "delay", "in", "out");
+            Types["gate"].KindOf = (n, p) => "level";
+            Types["port in"].KindOf = (n, p) => "level";
+            // A ship value's kind and name follow its setting: fuel is a level, shield_on is on/off, speed a number.
+            Types["ship"].KindOf = (n, p) =>
+            {
+                var v = SettingOr(n, "value");
+                return shipFlags.Contains(v) ? "onoff" : shipLevels.Contains(v) ? "level" : "number";
+            };
+            // Outputs named after what they carry, so wires read like ship.fuel -> meter.value.
+            Types["ship"].OutsOf = n => new[] { PortName(SettingOr(n, "value")) };
+            Types["port in"].OutsOf = n => new[] { PortName(SettingOr(n, "port")) };
+            Types["receive"].OutsOf = n => new[] { PortName(SettingOr(n, "port")) };
         }
 
         // The game's gate maths (CommandLogic): OR the highest input, AND the lowest (0 with none), XOR folded as
@@ -509,7 +627,21 @@ end";
                         throw new GraphException($"line {lineNo}: \"{words[0]}\"? A line starts with node, wire, comment or rate");
                 }
             }
+            RenameOldOutputs(g);
             return g;
+        }
+
+        // Outputs that got names of their own (ship.out became ship.fuel, a button's out became on): a wire from the
+        // old name, on a node with just one output, moves to that output, so older graphs keep working.
+        internal static void RenameOldOutputs(Graph g)
+        {
+            for (int i = 0; i < g.Wires.Count; i++)
+            {
+                var w = g.Wires[i];
+                if (!g.Nodes.TryGetValue(w.fromNode, out var from)) continue;
+                var outs = from.Outs;
+                if (outs.Length == 1 && !outs.Contains(w.fromPort)) g.Wires[i] = (w.fromNode, outs[0], w.toNode, w.toPort, w.line);
+            }
         }
 
         static string Known(NodeType t)
@@ -554,43 +686,36 @@ end";
         public static string Compile(string text, string name)
         {
             var g = Parse(text);
-            if (g.Nodes.Count == 0) throw new GraphException("the graph has no nodes");
-
-            // Check the wires and note what feeds each input.
-            var wiredFrom = g.Nodes.Keys.ToDictionary(id => id, id => new Dictionary<string, string>());
-            foreach (var w in g.Wires)
-            {
-                if (!g.Nodes.TryGetValue(w.fromNode, out var from)) throw new GraphException($"line {w.line}: there's no node {w.fromNode}");
-                if (!g.Nodes.TryGetValue(w.toNode, out var to)) throw new GraphException($"line {w.line}: there's no node {w.toNode}");
-                if (!from.Outs.Contains(w.fromPort))
-                    throw new GraphException($"line {w.line}: {from.Type.Name} (node {from.Id}) has no output \"{w.fromPort}\"" + (from.Outs.Length > 0 ? $"; it has {string.Join(", ", from.Outs)}" : "; it has none"));
-                if (!to.Ins.Contains(w.toPort))
-                    throw new GraphException($"line {w.line}: {to.Type.Name} (node {to.Id}) has no input \"{w.toPort}\"" + (to.Ins.Length > 0 ? $"; it has {string.Join(", ", to.Ins)}" : "; it has none"));
-                if (wiredFrom[w.toNode].ContainsKey(w.toPort))
-                    throw new GraphException($"line {w.line}: {w.toNode}.{w.toPort} already has a wire into it; an input takes one");
-                wiredFrom[w.toNode][w.toPort] = $"{w.fromNode}.{w.fromPort}";
-            }
+            if (g.Nodes.Count == 0) throw new GraphException("the circuit has no nodes");
+            var pin = g.Nodes.Values.FirstOrDefault(x => x.Type.Name == "chip in" || x.Type.Name == "chip out" || x.Type.Name == "chip setting");
+            if (pin != null) throw new GraphException($"node {pin.Id}: {pin.Type.Name} only works inside a chip (a .circuit in the nodes folder)");
+            var wiredFrom = CheckWires(g);
 
             var order = Order(g);
             var lua = new StringBuilder();
-            lua.AppendLine($"-- Made from {name}.graph by EvoCore. Don't edit this: change the graph and save it.");
+            lua.AppendLine($"-- Made from {name}.circuit by EvoCore. Don't edit this: change the circuit and save it.");
             lua.AppendLine($"rate = {Lit(g.Rate)}");
             lua.AppendLine("V = {}  -- every wire's value, by \"node.port\"; kept between ticks, so a wire back into an earlier node reads last tick's");
             lua.AppendLine("S = {}  -- each node's own memory (timers, latches, counters)");
             lua.AppendLine("local function b(x) return x > 0.5 end           -- is this value on?");
             lua.AppendLine("local function n(c) if c then return 1 end return 0 end  -- on/off as 1/0");
-            // Lua-written nodes this graph uses: each file's code once, called by every node of that type.
-            var custom = g.Nodes.Values.Select(x => x.Type).Where(t => t.Source != null).Distinct().ToList();
+            // Lua-written nodes and chips this graph uses, what they use first: each file's code once, called by every
+            // node of that type.
+            var custom = new List<NodeType>();
+            void Need(NodeType t)
+            {
+                if (custom.Contains(t)) return;
+                if (t.Uses != null) foreach (var u in t.Uses) Need(u);
+                custom.Add(t);
+            }
+            foreach (var t in g.Nodes.Values.Select(x => x.Type).Where(t => t.Source != null).Distinct()) Need(t);
             var scripts = g.Nodes.Values.Where(x => x.Type.Name == "lua" && x.Type.Source == null).ToList();
             foreach (var x in scripts) CheckLuaNode(x);
             lua.AppendLine("local function num(x) if x == true then return 1 elseif not x then return 0 end return tonumber(x) or 0 end");
-            string Names(params string[] types) => string.Join(", ", g.Nodes.Values.Where(x => types.Contains(x.Type.Name))
-                .Select(x => x.Settings.TryGetValue("port", out var v) ? v : "").Where(v => v != "").Distinct().Select(LuaString).ToArray());
-            var portIns = Names("port in");
-            var portOuts = Names("port out");
-            var channels = Names("send", "receive");
-            if (portIns.Length + portOuts.Length + channels.Length > 0)
-                lua.AppendLine($"if ports then ports.declare{{ inputs = {{ {portIns} }}, outputs = {{ {portOuts} }}, channels = {{ {channels} }} }} end");
+            var ports = DeclaredPorts(g);
+            string List(string kind) => string.Join(", ", ports[kind].Select(LuaString).ToArray());
+            if (ports.Values.Any(l => l.Count > 0))
+                lua.AppendLine($"if ports then ports.declare{{ inputs = {{ {List("inputs")} }}, outputs = {{ {List("outputs")} }}, channels = {{ {List("channels")} }}, displays = {{ {List("displays")} }} }} end");
             if (scripts.Count > 0)
             {
                 lua.AppendLine("L = {}  -- lua nodes: each one's ports, and its tick and on_input");
@@ -598,7 +723,7 @@ end";
             }
             if (custom.Count > 0)
             {
-                lua.AppendLine("N = {}  -- Lua-written nodes, from the nodes folder");
+                lua.AppendLine("N = {}  -- Lua-written nodes and chips, from the nodes folder");
                 foreach (var t in custom)
                     lua.AppendLine($"N[{LuaString(t.Name)}] = (function()\n{t.Source}\nend)()");
             }
@@ -617,6 +742,89 @@ end";
             }
             lua.AppendLine("end");
             return lua.ToString();
+        }
+
+        // Checks every wire and notes what feeds each input: node -> (input -> "node.port").
+        static Dictionary<int, Dictionary<string, string>> CheckWires(Graph g)
+        {
+            var wiredFrom = g.Nodes.Keys.ToDictionary(id => id, id => new Dictionary<string, string>());
+            foreach (var w in g.Wires)
+            {
+                if (!g.Nodes.TryGetValue(w.fromNode, out var from)) throw new GraphException($"line {w.line}: there's no node {w.fromNode}");
+                if (!g.Nodes.TryGetValue(w.toNode, out var to)) throw new GraphException($"line {w.line}: there's no node {w.toNode}");
+                if (!from.Outs.Contains(w.fromPort))
+                    throw new GraphException($"line {w.line}: {from.Type.Name} (node {from.Id}) has no output \"{w.fromPort}\"" + (from.Outs.Length > 0 ? $"; it has {string.Join(", ", from.Outs)}" : "; it has none"));
+                if (!to.Ins.Contains(w.toPort))
+                    throw new GraphException($"line {w.line}: {to.Type.Name} (node {to.Id}) has no input \"{w.toPort}\"" + (to.Ins.Length > 0 ? $"; it has {string.Join(", ", to.Ins)}" : "; it has none"));
+                if (wiredFrom[w.toNode].ContainsKey(w.toPort))
+                    throw new GraphException($"line {w.line}: {w.toNode}.{w.toPort} already has a wire into it; an input takes one");
+                wiredFrom[w.toNode][w.toPort] = $"{w.fromNode}.{w.fromPort}";
+            }
+            return wiredFrom;
+        }
+
+        // The ports a graph declares, by kind (inputs, outputs, channels, displays): the built-in port nodes' `port`
+        // settings, what Lua-written nodes name in the settings their `declares` points at (a display node's
+        // screen=hud, a bundle's channel=...), and whatever the chips in it declare.
+        internal static Dictionary<string, List<string>> DeclaredPorts(Graph g)
+        {
+            var result = new Dictionary<string, List<string>>();
+            void Collect(string kind, params string[] types)
+            {
+                var names = g.Nodes.Values.Where(x => types.Contains(x.Type.Name))
+                    .Select(x => x.Settings.TryGetValue("port", out var v) ? v : "").ToList();
+                foreach (var x in g.Nodes.Values)
+                {
+                    if (x.Type.Declares != null && x.Type.Declares.TryGetValue(kind, out var setting))
+                    {
+                        var v = x.Settings.TryGetValue(setting, out var set) ? set : x.Type.Settings.TryGetValue(setting, out var def) ? def : "";
+                        if (!double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out _) && v != "none") names.Add(v);
+                    }
+                    if (x.Type.ChipPorts != null && x.Type.ChipPorts.TryGetValue(kind, out var inside)) names.AddRange(inside);
+                }
+                result[kind] = names.Where(v => v != "").Distinct().ToList();
+            }
+            Collect("inputs", "port in");
+            Collect("outputs", "port out");
+            Collect("channels", "send", "receive");
+            Collect("displays");
+            return result;
+        }
+
+        // A chip as a Lua module, for its node type (NodeLibrary.LoadChip): run(I, settings, state) works the chip's
+        // nodes out once, with I as what's on its input pins, and returns its output pins. Each chip on a board
+        // keeps its own wires and memory in its state, and times itself (dt) as Lua-written nodes do.
+        internal static string ChipModule(Graph g, string name)
+        {
+            if (g.Nodes.Count == 0) throw new GraphException("the chip has no nodes");
+            var luaNode = g.Nodes.Values.FirstOrDefault(x => x.Type.Name == "lua");
+            if (luaNode != null) throw new GraphException($"node {luaNode.Id}: a chip can't hold a lua node yet; make it a Lua-written node in the nodes folder instead");
+            var wiredFrom = CheckWires(g);
+            var sb = new StringBuilder();
+            sb.AppendLine($"-- the chip {name}, made from {name}.circuit");
+            sb.AppendLine("local M = {}");
+            sb.AppendLine("function M.run(I, s, state)");
+            sb.AppendLine("  local inst = state.inst");
+            sb.AppendLine("  if not inst then");
+            sb.AppendLine("    inst = { V = {}, S = {} }; state.inst = inst");
+            foreach (var node in g.Nodes.Values)
+            {
+                sb.Append($"    inst.S[{node.Id}] = {{}}");
+                foreach (var port in node.Outs) sb.Append($"; inst.V[\"{node.Id}.{port}\"] = 0");
+                sb.AppendLine();
+            }
+            sb.AppendLine("  end");
+            sb.AppendLine("  local V, S, O = inst.V, inst.S, {}");
+            sb.AppendLine("  local now = time(); local dt = inst.t and (now - inst.t) or 0; inst.t = now");
+            foreach (var node in Order(g))
+            {
+                sb.AppendLine($"  -- node {node.Id}: {node.Type.Name}");
+                sb.AppendLine("  " + node.Type.Code(new Emit { Node = node, wiredFrom = wiredFrom[node.Id] }));
+            }
+            sb.AppendLine("  return O");
+            sb.AppendLine("end");
+            sb.AppendLine("return M");
+            return sb.ToString();
         }
 
         // Each node after the nodes that feed it, lowest number first among equals. If wires form a loop, the lowest
@@ -642,7 +850,7 @@ end";
         public static string Write(Graph g, string name)
         {
             var sb = new StringBuilder();
-            sb.Append($"# {name}.graph, saved by the graph editor\n");
+            sb.Append($"# {name}.circuit, saved by the circuit editor\n");
             sb.Append($"rate {Lit(g.Rate)}\n");
             foreach (var node in g.Nodes.Values)
             {
@@ -667,10 +875,10 @@ end";
         // DevBridge: what scripts\<name>.graph compiles to, or why it doesn't.
         public static string ShowLua(string name)
         {
-            var path = Path.Combine(Lua.ScriptsDir, name + ".graph");
+            var path = Path.Combine(Lua.ScriptsDir, name + ".circuit");
             if (!File.Exists(path)) return "no such file: " + path;
             try { return Compile(File.ReadAllText(path), name); }
-            catch (GraphException e) { return $"{name}.graph: {e.Message}"; }
+            catch (GraphException e) { return $"{name}.circuit: {e.Message}"; }
         }
 
         // DevBridge: every node type, its inputs, outputs, settings and what it does.

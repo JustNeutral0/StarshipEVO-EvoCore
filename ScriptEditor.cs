@@ -22,7 +22,7 @@ namespace EvoCore
             try
             {
                 // The Computer screen (GraphEditor.cs): its Graph tab for a computer running a graph, else its Script tab.
-                if (File.Exists(Path.Combine(ScriptsDir, name + ".graph"))) { Graphs.OpenCanvas(name); return; }
+                if (File.Exists(Path.Combine(ScriptsDir, name + ".circuit"))) { Graphs.OpenCanvas(name); return; }
                 Editor.OpenByName(name);
                 Graphs.OpenScriptTab();
             }

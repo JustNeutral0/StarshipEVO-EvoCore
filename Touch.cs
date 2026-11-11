@@ -52,7 +52,8 @@ namespace EvoCore
                 var ray = new Ray(camera.transform.position, camera.transform.forward);
                 // The game's own pick (ActionActivate) says which block is really in front: nothing between you and it.
                 var over = ActionActivate.CommandOver.Value as Command;
-                if (Monitors.Hit(ray, TouchReach, d => d.Block == over && HasTouch(d.Owner), out var d, out var p)) { now = d; at = p; }
+                // A display surface (decals) is never the block the game picks, so it's taken on the ray alone.
+                if (Monitors.Hit(ray, TouchReach, d => (d.External || d.Block == over) && HasTouch(d.Owner), out var d, out var p)) { now = d; at = p; }
             }
             if (now != hover && hover != null) Light(hover, null);
             hover = now; hoverAt = at;

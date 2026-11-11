@@ -1,0 +1,14 @@
+# {name}.circuit: a light blinks when the ship runs hot, with a banner on the monitor.
+rate 0.1
+comment at=-10,-60 size=760,50 text="Link the computer to a light; in the window that pops up, pick the port warning_light."
+node 1 ship value=heat
+node 2 alarm warn_at=0.7 alert_at=0.9 low=0
+node 3 blink on=0.4 off=0.4
+node 4 port out port=warning_light
+node 5 lamp label=HEAT x=20 y=40
+node 6 alert text=OVERHEAT
+wire 1.heat 2.x
+wire 2.any 3.in
+wire 3.out 4.in
+wire 3.out 5.value
+wire 2.alert 6.value

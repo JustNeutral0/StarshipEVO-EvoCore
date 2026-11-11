@@ -1,0 +1,8 @@
+# {name}.circuit: sends fuel and speed to another computer down one link. Put "two computers receive" on the other.
+rate 0.1
+comment at=-10,-60 size=700,50 text="Link this computer to the other one; in the window that pops up, pair the channel link on both."
+node 1 ship value=fuel
+node 2 ship value=speed
+node 3 bundle channel=link fields="fuel, speed"
+wire 1.fuel 3.fuel
+wire 2.speed 3.speed

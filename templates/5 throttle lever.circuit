@@ -1,0 +1,12 @@
+# {name}.circuit: the up and down arrow keys move a throttle, shown on the monitor.
+rate 0.1
+comment at=-10,-60 size=760,50 text="Link the computer to thrusters (or anything); in the window that pops up, pick the port thrusters."
+node 1 key key=up
+node 2 key key=down
+node 3 lever speed=0.5
+node 4 port out port=thrusters
+node 5 meter label=THROTTLE x=10 y=10 w=220
+wire 1.held 3.up
+wire 2.held 3.down
+wire 3.out 4.in
+wire 3.out 5.value

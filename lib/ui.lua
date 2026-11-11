@@ -20,6 +20,14 @@ ui.theme = {
 local function opt(o, k, v) if o ~= nil and o[k] ~= nil then return o[k] end return v end
 local function clamp(v, a, b) if v < a then return a elseif v > b then return b end return v end
 
+-- The text size, down from size, at which s fits in width (never below 6), so narrow screens shrink text instead of
+-- running it into its neighbours.
+function ui.fit(d, s, size, width, font)
+  local m = d.measure(tostring(s), size, font)
+  if m <= width or m <= 0 then return size end
+  return math.max(6, size * width / m)
+end
+
 -- The colour for a level: theme fg, or warn/alert once past those thresholds. With low = true, low is bad.
 function ui.level(value, o)
   local t = ui.theme
@@ -95,11 +103,11 @@ function ui.gauge(d, x, y, r, value, o)
   d.circle(x, y, math.max(2, r * 0.08), t.text)
   d.text(x, y + r * 0.22, percent(value, o), color, math.max(9, r * 0.3), "center")
   local label = opt(o, "label", nil)
-  if label then d.text(x, y + r * 0.62, label, t.muted, math.max(8, r * 0.2), "center", "display") end
+  if label then d.text(x, y + r * 0.62, label, t.muted, ui.fit(d, label, math.max(8, r * 0.2), r * 1.6, "display"), "center", "display") end
 end
 
 -- A full ring that fills clockwise from the top, with the value in the middle.
--- opts: label, warn, alert, low, color, thickness
+-- opts: label, width (room for the label, else about the ring's), warn, alert, low, color, thickness
 function ui.ring(d, x, y, r, value, o)
   local t = ui.theme
   local f = clamp(value, 0, 1)
@@ -109,7 +117,7 @@ function ui.ring(d, x, y, r, value, o)
   if f > 0 then d.arc(x, y, r, 0, 360 * f, color, thick) end
   d.text(x, y - r * 0.28, percent(value, o), color, math.max(9, r * 0.42), "center")
   local label = opt(o, "label", nil)
-  if label then d.text(x, y + r * 0.2, label, t.muted, math.max(8, r * 0.24), "center", "display") end
+  if label then d.text(x, y + r * 0.2, label, t.muted, ui.fit(d, label, math.max(8, r * 0.24), opt(o, "width", r * 1.7), "display"), "center", "display") end
 end
 
 -- An aiming mark. style: "cross" (default), "circle", "brackets", "dot" or "diamond".
@@ -260,8 +268,11 @@ function ui.rows(d, x, y, w, rows, o)
     local ry = y + (i - 1) * gap
     local value = row[2]
     if type(value) == "number" then value = (row[3] == "%") and string.format("%.0f%%", value * 100) or string.format("%.1f", value) .. (row[3] or "") end
-    d.text(x, ry, row[1], t.muted, size)
-    d.text(x + w, ry, tostring(value), opt(o, "color", t.text), size, "right")
+    value = tostring(value)
+    -- Label and value shrink together when they'd meet.
+    local s = ui.fit(d, row[1] .. "  " .. value, size, w)
+    d.text(x, ry, row[1], t.muted, s)
+    d.text(x + w, ry, value, opt(o, "color", t.text), s, "right")
     d.line(x, ry + size + 2, x + w, ry + size + 2, t.dim, 1)
   end
 end

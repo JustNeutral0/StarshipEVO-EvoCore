@@ -1,0 +1,16 @@
+# {name}.circuit: fuel and speed on the monitor, with a LOW FUEL warning.
+# Link a monitor to the computer. Drag the meter or text on the preview to move them.
+rate 0.1
+node 1 ship value=fuel
+node 2 ship value=speed
+node 3 panel title=FLIGHT x=8 y=8 w=224 h=110
+node 4 meter label=FUEL x=18 y=36 w=200 low=1 warn=0.3 alert=0.1
+node 5 readout text="SPEED {v} m/s" x=18 y=74 size=16
+node 6 alarm warn_at=0.3 alert_at=0.1
+node 7 alert text="LOW FUEL"
+node 8 plot label=SPEED x=8 y=130 w=224 h=100
+wire 1.fuel 4.value
+wire 2.speed 5.value
+wire 1.fuel 6.x
+wire 6.alert 7.value
+wire 2.speed 8.value

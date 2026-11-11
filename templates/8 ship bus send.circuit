@@ -1,0 +1,7 @@
+# {name}.circuit: puts fuel and speed on the ship bus "flight"; any computer on the ship reads them. Needs a Mainframe.
+rate 0.1
+node 1 ship value=fuel
+node 2 ship value=speed
+node 3 bus send bus=flight fields="fuel, speed"
+wire 1.fuel 3.fuel
+wire 2.speed 3.speed

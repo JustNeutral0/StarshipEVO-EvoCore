@@ -1,0 +1,9 @@
+# {name}.circuit: reads fuel and speed from the ship bus "flight". Needs a Mainframe on the ship.
+rate 0.1
+node 1 bus read bus=flight fields="fuel, speed"
+node 2 meter label=FUEL x=10 y=10 w=220
+node 3 readout text="SPEED {v} m/s" x=10 y=50
+node 4 lamp label="BUS OK" x=20 y=100
+wire 1.fuel 2.value
+wire 1.speed 3.value
+wire 1.ok 4.value

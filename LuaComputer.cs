@@ -59,15 +59,52 @@ namespace EvoCore
             OnEdited();
         }
 
+        // Apps installed on it (Apps.cs), in install order; null when it never had any.
+        public List<InstalledApp> InstalledApps;
+
+        public void SetApps(List<InstalledApp> apps)
+        {
+            InstalledApps = apps;
+            if (ProgramId == null) NewProgramId();
+            OnEdited();
+        }
+
+        // Its board and the chips on it (Parts.cs), as saved text; null when it has no board.
+        public string Hardware;
+
+        public void SetHardware(string text)
+        {
+            Hardware = string.IsNullOrEmpty(text) ? null : text;
+            if (ProgramId == null) NewProgramId();
+            OnEdited();
+        }
+
+        // Program and apps at once, when a board comes in or goes out (BoardSoftware.cs).
+        public void SetSoftware(string kind, string program, List<InstalledApp> apps)
+        {
+            ProgramKind = kind == "graph" ? "graph" : "lua";
+            Program = program;
+            InstalledApps = apps;
+            if (ProgramId == null) NewProgramId();
+            OnEdited();
+        }
+
         public void NewProgramId() => ProgramId = Guid.NewGuid().ToString("N").Substring(0, 6);
 
-        // evoprog3\n<id>\n<kind>\n<program length, -1 for none>\n<anims length>\n<program><anims><ports>.
-        // (evoprog2 had no ports and no anims length; evoprog1 no anims and no length.)
+        // evoprog5\n<id>\n<kind>\n<program length, -1 for none>\n<anims length>\n<ports length>\n<apps length>\n
+        // <program><anims><ports><apps><hardware>.
+        // (evoprog4 had no apps length and no hardware; evoprog3 no ports length and no apps; evoprog2 no ports and no
+        // anims length; evoprog1 no anims and no length.)
         // Once a computer has had a program it always writes its data, even "none" (length -1): with nothing written,
         // the game would keep the last data it had and load it back (an undone refit came back that way).
-        public override byte[] GetCustomData(bool isBlueprintExport) =>
-            Program == null && Anims == null && PortMap == null && ProgramId == null ? null :
-            Encoding.UTF8.GetBytes($"evoprog3\n{ProgramId}\n{ProgramKind}\n{(Program == null ? -1 : Program.Length)}\n{(Anims ?? "").Length}\n{Program}{Anims}{PortMap}");
+        public override byte[] GetCustomData(bool isBlueprintExport)
+        {
+            if (Program == null && Anims == null && PortMap == null && ProgramId == null && InstalledApps == null && Hardware == null) return null;
+            EvoCore.Apps.Flush(this);
+            var apps = EvoCore.Apps.Write(InstalledApps);
+            return Encoding.UTF8.GetBytes($"evoprog5\n{ProgramId}\n{ProgramKind}\n{(Program == null ? -1 : Program.Length)}\n{(Anims ?? "").Length}\n{(PortMap ?? "").Length}\n{apps.Length}\n" +
+                $"{Program}{Anims}{PortMap}{apps}{Hardware}");
+        }
 
         public override void OnSaveLoaded(byte[] customData, bool onInit)
         {
@@ -84,6 +121,47 @@ namespace EvoCore
                     ProgramKind = parts[2] == "graph" ? "graph" : "lua";
                     Program = parts[3];
                     Anims = null;
+                }
+                else if (text.StartsWith("evoprog5\n"))
+                {
+                    var parts = text.Split(new[] { '\n' }, 8);
+                    if (parts.Length < 8) return;
+                    ProgramId = parts[1];
+                    ProgramKind = parts[2] == "graph" ? "graph" : "lua";
+                    var length = int.Parse(parts[3]);
+                    var animsLength = int.Parse(parts[4]);
+                    var portsLength = int.Parse(parts[5]);
+                    var appsLength = int.Parse(parts[6]);
+                    var rest = parts[7];
+                    var at = Math.Max(0, length);
+                    Program = length < 0 ? null : rest.Substring(0, length);
+                    var anims = rest.Substring(at, animsLength);
+                    Anims = anims.Length == 0 ? null : anims;
+                    at += animsLength;
+                    var ports = rest.Substring(at, portsLength);
+                    PortMap = ports.Length == 0 ? null : ports;
+                    at += portsLength;
+                    InstalledApps = EvoCore.Apps.Read(rest.Substring(at, appsLength));
+                    var hardware = rest.Substring(at + appsLength);
+                    Hardware = hardware.Length == 0 ? null : hardware;
+                }
+                else if (text.StartsWith("evoprog4\n"))
+                {
+                    var parts = text.Split(new[] { '\n' }, 7);
+                    if (parts.Length < 7) return;
+                    ProgramId = parts[1];
+                    ProgramKind = parts[2] == "graph" ? "graph" : "lua";
+                    var length = int.Parse(parts[3]);
+                    var animsLength = int.Parse(parts[4]);
+                    var portsLength = int.Parse(parts[5]);
+                    var rest = parts[6];
+                    var at = Math.Max(0, length);
+                    Program = length < 0 ? null : rest.Substring(0, length);
+                    var anims = rest.Substring(at, animsLength);
+                    Anims = anims.Length == 0 ? null : anims;
+                    var ports = rest.Substring(at + animsLength, portsLength);
+                    PortMap = ports.Length == 0 ? null : ports;
+                    InstalledApps = EvoCore.Apps.Read(rest.Substring(at + animsLength + portsLength));
                 }
                 else if (text.StartsWith("evoprog3\n"))
                 {

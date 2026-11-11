@@ -28,6 +28,32 @@ namespace EvoCore
     public static partial class Graphs
     {
         public static string NodesDir => Path.Combine(Path.Combine(Paths.UserData, "EvoCore"), "nodes");
+        // Starting points for new graphs (GraphEditor's New row): any .graph here, {name} replaced by the new name.
+        public static string TemplatesDir => Path.Combine(Path.Combine(Paths.UserData, "EvoCore"), "templates");
+
+        // Circuit files end in .circuit. Up to EvoCore 0.14 they were called graphs and ended in .graph: any of those
+        // lying in the EvoCore folders (an old install, a file from a friend) is renamed where it is, unless a
+        // .circuit of that name is already there. Inside, the two are the same text.
+        internal static void AdoptOld()
+        {
+            foreach (var dir in new[] { Lua.ScriptsDir, NodesDir, TemplatesDir, Apps.Dir, Lua.ComputersDir })
+            {
+                string[] old;
+                try { old = Directory.GetFiles(dir, "*.graph"); }
+                catch { continue; }
+                foreach (var path in old)
+                {
+                    var to = Path.ChangeExtension(path, ".circuit");
+                    if (File.Exists(to)) continue;
+                    try
+                    {
+                        File.Move(path, to);
+                        Core.Log.Msg($"Circuits: renamed {Path.GetFileName(path)} to {Path.GetFileName(to)}");
+                    }
+                    catch (Exception e) { Core.Log.Warning($"Circuits: couldn't rename {Path.GetFileName(path)}: {e.Message}"); }
+                }
+            }
+        }
 
         // Goes up whenever a node is added, changed or removed; the runner restarts graphs started on an older one.
         public static int Version { get; private set; }
@@ -47,7 +73,7 @@ namespace EvoCore
                 Settings = settings ?? new Dictionary<string, string>(), Code = code,
             };
             if (Types.TryGetValue(name, out var old) && old.Source == null && old.File == null)
-                Core.Log.Warning($"Graphs: node \"{name}\" registered again; the new one wins");
+                Core.Log.Warning($"Circuits: node \"{name}\" registered again; the new one wins");
             Types[name] = t;
             Version++;
             return t;
@@ -84,7 +110,7 @@ namespace EvoCore
                 {
                     NodeErrors[name] = error;
                     if (Types.TryGetValue(name, out var stale) && stale.File != null) Types.Remove(name);
-                    Core.Log.Warning($"Graphs: node {name}.lua: {error}");
+                    Core.Log.Warning($"Circuits: node {name}.lua: {error}");
                 }
             }
             foreach (var gone in nodeTimes.Keys.Where(n => !present.Contains(n)).ToList())
@@ -94,7 +120,125 @@ namespace EvoCore
                 if (Types.TryGetValue(gone, out var t) && t.File != null) Types.Remove(gone);
                 changed = true;
             }
+            if (ScanChips(changed)) changed = true;
             if (changed) Version++;
+        }
+
+        // ---- Chips: a .graph in the nodes folder is a node made of nodes ----
+        // Its `chip in` nodes are its input pins and its `chip out` nodes its output pins (top to bottom on its
+        // board); everything between runs inside it, each chip on a board with its own memory (Graphs.ChipModule).
+        // A first line "# help: ..." says what it does. Chips can hold Lua-written nodes and other chips, not lua
+        // nodes, and not themselves.
+
+        static readonly Dictionary<string, DateTime> chipTimes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
+        internal static bool IsChipFile(string path) =>
+            path != null && path.EndsWith(".circuit", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(Path.GetFullPath(Path.GetDirectoryName(path)).TrimEnd('\\', '/'), Path.GetFullPath(NodesDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
+        // Loads every chip again when a chip file or any node changed: in passes, so a chip using another chip
+        // loads after it. True when anything changed.
+        static bool ScanChips(bool nodesChanged)
+        {
+            string[] files;
+            try { files = Directory.GetFiles(NodesDir, "*.circuit"); }
+            catch { return false; }
+            var changed = nodesChanged;
+            var present = new HashSet<string>(files.Select(f => Path.GetFileNameWithoutExtension(f)), StringComparer.OrdinalIgnoreCase);
+            foreach (var path in files)
+            {
+                DateTime time;
+                try { time = File.GetLastWriteTimeUtc(path); } catch { continue; }
+                var name = Path.GetFileNameWithoutExtension(path);
+                if (!chipTimes.TryGetValue(name, out var known) || known != time) { chipTimes[name] = time; changed = true; }
+            }
+            foreach (var gone in chipTimes.Keys.Where(n => !present.Contains(n)).ToList())
+            {
+                chipTimes.Remove(gone);
+                NodeErrors.Remove(gone);
+                if (Types.TryGetValue(gone, out var t) && t.File != null && IsChipFile(t.File)) Types.Remove(gone);
+                changed = true;
+            }
+            if (!changed) return false;
+            // Out with the old chip types, then load until a pass loads nothing more.
+            foreach (var old in Types.Where(p => p.Value.File != null && IsChipFile(p.Value.File)).Select(p => p.Key).ToList()) Types.Remove(old);
+            var waiting = files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+            var errors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            while (waiting.Count > 0)
+            {
+                var loaded = false;
+                foreach (var path in waiting.ToList())
+                {
+                    var name = Path.GetFileNameWithoutExtension(path);
+                    var type = LoadChip(path, out var error);
+                    if (type == null) { errors[name] = error; continue; }
+                    Types[name] = type;
+                    errors.Remove(name);
+                    NodeErrors.Remove(name);
+                    waiting.Remove(path);
+                    loaded = true;
+                }
+                if (!loaded) break;
+            }
+            foreach (var e in errors)
+            {
+                NodeErrors[e.Key] = e.Value;
+                Core.Log.Warning($"Circuits: chip {e.Key}.circuit: {e.Value}");
+            }
+            return true;
+        }
+
+        // Reads a chip file into a node type, or says why it can't.
+        internal static NodeType LoadChip(string path, out string error)
+        {
+            error = null;
+            var name = Path.GetFileNameWithoutExtension(path);
+            if (!validNode.IsMatch(name)) { error = "use letters, numbers, spaces, - or _ in the file name"; return null; }
+            if (Types.TryGetValue(name, out var existing) && !(existing.File != null && IsChipFile(existing.File)))
+            {
+                error = existing.File == null ? $"a built-in node is already called \"{name}\"; rename the file" : $"{name}.lua is a node with the same name; rename one";
+                return null;
+            }
+            string text;
+            try { text = File.ReadAllText(path); }
+            catch (Exception e) { error = e.Message; return null; }
+            try
+            {
+                var g = Parse(text);
+                var uses = g.Nodes.Values.Select(n => n.Type).Where(t => t.Source != null).Distinct().ToList();
+                bool Inside(NodeType t, HashSet<NodeType> seen) =>
+                    string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase) || t.Uses != null && seen.Add(t) && t.Uses.Any(u => Inside(u, seen));
+                if (uses.Any(u => Inside(u, new HashSet<NodeType>()))) { error = "it holds itself (maybe through another chip)"; return null; }
+                var pinsIn = g.Nodes.Values.Where(n => n.Type.Name == "chip in").OrderBy(n => n.Y).ThenBy(n => n.Id).ToList();
+                var pinsOut = g.Nodes.Values.Where(n => n.Type.Name == "chip out").OrderBy(n => n.Y).ThenBy(n => n.Id).ToList();
+                var ins = pinsIn.Select(n => n.Outs[0]).Distinct().ToArray();
+                var outs = pinsOut.Select(n => n.Ins[0]).Distinct().ToArray();
+                var clash = ins.Intersect(outs).FirstOrDefault();
+                if (clash != null) { error = $"\"{clash}\" is both an input pin and an output pin; rename one"; return null; }
+                // Its settings: each chip setting node's name, with its value as the default.
+                var knobs = g.Nodes.Values.Where(n => n.Type.Name == "chip setting").OrderBy(n => n.Y).ThenBy(n => n.Id).ToList();
+                var settings = new Dictionary<string, string>();
+                foreach (var k in knobs) settings[k.Outs[0]] = SettingOr(k, "value");
+                var knobClash = settings.Keys.Intersect(ins.Concat(outs)).FirstOrDefault();
+                if (knobClash != null) { error = $"\"{knobClash}\" is both a pin and a setting; rename one"; return null; }
+                var kinds = new Dictionary<string, string>();
+                foreach (var n in pinsIn) kinds[n.Outs[0]] = PortKind(n, n.Outs[0]);
+                foreach (var n in pinsOut) kinds[n.Ins[0]] = PortKind(n, n.Ins[0]);
+                var help = text.Replace("\r", "").Split('\n').Select(l => l.Trim())
+                    .FirstOrDefault(l => l.StartsWith("# help:", StringComparison.OrdinalIgnoreCase));
+                var t = new NodeType
+                {
+                    Name = name, Category = "Chips", File = path, Uses = uses, Kinds = kinds,
+                    Help = help != null ? help.Substring(7).Trim() : $"a chip of {g.Nodes.Count} nodes",
+                    Ins = ins, Outs = outs, Settings = settings, Source = ChipModule(g, name), ChipPorts = DeclaredPorts(g),
+                };
+                foreach (var k in knobs) t.Docs[k.Outs[0]] = $"a setting of this chip (it starts at {SettingOr(k, "value")})";
+                foreach (var n in pinsIn) t.Docs[n.Outs[0]] = "an input pin of this chip";
+                foreach (var n in pinsOut) t.Docs[n.Ins[0]] = "an output pin of this chip";
+                t.Code = e => CallCode(t, e);
+                return t;
+            }
+            catch (GraphException e) { error = e.Message; return null; }
         }
 
         // Reads a node file in the sandbox and makes its node type, or says why it can't.
@@ -142,8 +286,71 @@ namespace EvoCore
                     settings[key] = pair.Value.Type == DataType.Number ? pair.Value.Number.ToString("R", CultureInfo.InvariantCulture)
                         : pair.Value.Type == DataType.Boolean ? (pair.Value.Boolean ? "1" : "0") : pair.Value.CastToString() ?? "";
                 }
-            var clash = ins.Intersect(outs).FirstOrDefault() ?? ins.Intersect(settings.Keys).FirstOrDefault();
+            var fixedIns = ins.Where(p => !p.StartsWith("$")).ToArray();
+            var fixedOuts = outs.Where(p => !p.StartsWith("$")).ToArray();
+            var clash = fixedIns.Intersect(fixedOuts).FirstOrDefault() ?? fixedIns.Intersect(settings.Keys).FirstOrDefault();
             if (clash != null) { error = $"\"{clash}\" is used twice; inputs, outputs and settings need different names"; return null; }
+            var unknown = ins.Concat(outs).Where(p => p.StartsWith("$") && !settings.ContainsKey(p.Substring(1))).FirstOrDefault();
+            if (unknown != null) { error = $"{unknown} names the setting \"{unknown.Substring(1)}\", which isn't in settings"; return null; }
+
+            Dictionary<string, string> declares = null;
+            var declaresValue = table.Get("declares");
+            if (declaresValue.Type == DataType.Table)
+            {
+                declares = new Dictionary<string, string>();
+                foreach (var pair in declaresValue.Table.Pairs)
+                {
+                    var kind = pair.Key.CastToString();
+                    var setting = pair.Value.CastToString()?.ToLowerInvariant();
+                    if (!new[] { "inputs", "outputs", "channels", "displays" }.Contains(kind)) { error = "declares: use inputs, outputs, channels or displays"; return null; }
+                    if (setting == null || !settings.ContainsKey(setting)) { error = $"declares: {kind} = \"{setting}\" should name one of its settings"; return null; }
+                    declares[kind] = setting;
+                }
+            }
+
+            // choices = { mode = { "hold", "toggle", "pulse" }, low = { 0, 1 } }: picked from a list ({0, 1}: on/off).
+            Dictionary<string, string[]> choices = null;
+            var choicesValue = table.Get("choices");
+            if (choicesValue.Type == DataType.Table)
+            {
+                choices = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+                foreach (var pair in choicesValue.Table.Pairs)
+                {
+                    var key = pair.Key.CastToString()?.ToLowerInvariant();
+                    if (key == null || !settings.ContainsKey(key)) { error = $"choices: \"{key}\" isn't one of its settings"; return null; }
+                    if (pair.Value.Type != DataType.Table) { error = $"choices: {key} should be a list, like {{ \"a\", \"b\" }}"; return null; }
+                    choices[key] = pair.Value.Table.Values.Select(v => v.Type == DataType.Number ? v.Number.ToString("R", CultureInfo.InvariantCulture) : v.CastToString() ?? "").ToArray();
+                }
+            }
+
+            // kinds = { value = "level", hide = "onoff" }: what a port carries (number, onoff or level; number if unlisted).
+            Dictionary<string, string> kinds = null;
+            var kindsValue = table.Get("kinds");
+            if (kindsValue.Type == DataType.Table)
+            {
+                kinds = new Dictionary<string, string>();
+                foreach (var pair in kindsValue.Table.Pairs)
+                {
+                    var port = pair.Key.CastToString()?.ToLowerInvariant();
+                    var kind = pair.Value.CastToString()?.ToLowerInvariant();
+                    if (port == null || !FloatKinds.Contains(kind)) { error = $"kinds: {port} = \"{kind}\"; use number, onoff or level"; return null; }
+                    kinds[port] = kind;
+                }
+            }
+
+            // optional = { "hide" }: inputs most graphs leave alone; the canvas keeps them out of the way until used.
+            // Unsaid, an input called hide is one (node files from before this could be said).
+            HashSet<string> optional = null;
+            var optionalValue = table.Get("optional");
+            if (optionalValue.Type == DataType.Table)
+            {
+                var named = Names(optionalValue, out var optionalError);
+                if (optionalError != null) { error = "optional: " + optionalError; return null; }
+                var stray = named.FirstOrDefault(p => !fixedIns.Contains(p));
+                if (stray != null) { error = $"optional: \"{stray}\" isn't one of its inputs"; return null; }
+                if (named.Length > 0) optional = new HashSet<string>(named);
+            }
+            else if (fixedIns.Contains("hide")) optional = new HashSet<string> { "hide" };
 
             var docs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var docTable = table.Get("docs");
@@ -155,11 +362,45 @@ namespace EvoCore
                 Name = name, Docs = docs,
                 Help = table.Get("help").CastToString() ?? "a Lua-written node",
                 Category = table.Get("category").CastToString() ?? "Custom",
-                Ins = ins, Outs = outs, Settings = settings, Source = source, File = path,
+                Ins = fixedIns, Outs = fixedOuts, Settings = settings, Source = source, File = path, Declares = declares, Choices = choices, Kinds = kinds, Optional = optional,
             };
+            if (ins.Length != fixedIns.Length) t.InsOf = n => Expand(t, n, ins, "in");
+            if (outs.Length != fixedOuts.Length) t.OutsOf = n => Expand(t, n, outs, "out");
             t.Code = e => CallCode(t, e);
             return t;
         }
+
+        // A port list with "$setting" entries: those become the names listed in that setting of the node (commas or
+        // spaces between), in order, skipping names that aren't usable, repeat, or clash with a setting or a fixed
+        // port; at most MaxLuaPorts in all. Cached by the settings' text, as the canvas asks every frame.
+        static string[] Expand(NodeType t, Node n, string[] list, string side)
+        {
+            var key = side + "|" + string.Join("|", list.Where(p => p.StartsWith("$"))
+                .Select(p => n.Settings.TryGetValue(p.Substring(1), out var v) ? v : t.Settings[p.Substring(1)]).ToArray());
+            lock (expanded)
+            {
+                if (expanded.TryGetValue(t, out var cache) && cache.TryGetValue(key, out var hit)) return hit;
+                var taken = new HashSet<string>(t.Settings.Keys.Concat(t.Ins).Concat(t.Outs));
+                var ports = new List<string>();
+                foreach (var p in list)
+                {
+                    if (!p.StartsWith("$")) { ports.Add(p); continue; }
+                    var raw = n.Settings.TryGetValue(p.Substring(1), out var v) ? v : t.Settings[p.Substring(1)];
+                    foreach (var word in Regex.Split(raw ?? "", @"[,\s]+"))
+                    {
+                        var name = word.ToLowerInvariant();
+                        if (name == "" || name == "none" || !Regex.IsMatch(name, @"^[a-z_]\w*$") || !taken.Add(name)) continue;
+                        ports.Add(name);
+                    }
+                }
+                var result = ports.Take(MaxLuaPorts).ToArray();
+                if (cache == null) expanded[t] = cache = new Dictionary<string, string[]>();
+                if (cache.Count > 200) cache.Clear();
+                cache[key] = result;
+                return result;
+            }
+        }
+        static readonly Dictionary<NodeType, Dictionary<string, string[]>> expanded = new Dictionary<NodeType, Dictionary<string, string[]>>();
 
         static string[] Names(DynValue v, out string error)
         {
@@ -170,7 +411,8 @@ namespace EvoCore
             foreach (var item in v.Table.Values)
             {
                 var n = item.CastToString();
-                if (string.IsNullOrEmpty(n) || !Regex.IsMatch(n, @"^[A-Za-z_]\w*$")) { error = $"\"{n}\" isn't a usable name (letters, numbers, _)"; return null; }
+                // "$fields": the names listed in the node's `fields` setting (Expand).
+                if (string.IsNullOrEmpty(n) || !Regex.IsMatch(n, @"^\$?[A-Za-z_]\w*$")) { error = $"\"{n}\" isn't a usable name (letters, numbers, _; or $setting)"; return null; }
                 names.Add(n.ToLowerInvariant());
             }
             if (names.Distinct().Count() != names.Count) { error = "a name is listed twice"; return null; }
@@ -180,13 +422,16 @@ namespace EvoCore
         // The Lua that runs one custom node: run(inputs, settings, memory), its results onto the output wires.
         static string CallCode(NodeType t, Emit e)
         {
-            var ins = string.Join(", ", t.Ins.Select(p => $"[{LuaString(p)}] = {e.In(p)}").ToArray());
+            // The node's own ports: a "$setting" port list depends on this node's settings.
+            var nodeIns = e.Node.Ins;
+            var nodeOuts = e.Node.Outs;
+            var ins = string.Join(", ", nodeIns.Select(p => $"[{LuaString(p)}] = {e.In(p)}").ToArray());
             var settings = string.Join(", ", t.Settings.Keys.Select(k => $"[{LuaString(k)}] = {SettingValue(e.Setting(k))}").ToArray());
             var call = $"N[{LuaString(t.Name)}].run({{{ins}}}, {{{settings}}}, {e.State})";
-            if (t.Outs.Length == 0) return call;
-            if (t.Outs.Length == 1)
-                return $"do local r = {call}; if type(r) == \"table\" then r = r[{LuaString(t.Outs[0])}] end; {e.Out(t.Outs[0])} = num(r) end";
-            return $"do local r = {call} or {{}}; " + string.Join(" ", t.Outs.Select(o => $"{e.Out(o)} = num(r[{LuaString(o)}]);").ToArray()) + " end";
+            if (nodeOuts.Length == 0) return call;
+            if (nodeOuts.Length == 1 && t.OutsOf == null)
+                return $"do local r = {call}; if type(r) == \"table\" then r = r[{LuaString(nodeOuts[0])}] end; {e.Out(nodeOuts[0])} = num(r) end";
+            return $"do local r = {call}; if type(r) ~= \"table\" then r = {{}} end; " + string.Join(" ", nodeOuts.Select(o => $"{e.Out(o)} = num(r[{LuaString(o)}]);").ToArray()) + " end";
         }
 
         // A setting as Lua: a number if it reads as one, else text.
@@ -201,11 +446,11 @@ namespace EvoCore
                 var path = Path.Combine(NodesDir, "hysteresis.lua");
                 if (!File.Exists(path)) File.WriteAllText(path, ExampleNode);
             }
-            catch (Exception e) { Core.Log.Warning("Graphs: couldn't write the example node: " + e.Message); }
+            catch (Exception e) { Core.Log.Warning("Circuits: couldn't write the example node: " + e.Message); }
         }
 
         const string ExampleNode =
-@"-- hysteresis.lua: an example custom node. Change it and save: graphs using it reload.
+@"-- hysteresis.lua: an example custom node. Change it and save: circuits using it reload.
 -- Turns on when x goes above high, off when it drops below low, and otherwise keeps what it was,
 -- so a value hovering around one threshold doesn't flicker (a fuel warning, a door near a sensor's edge).
 return {
@@ -231,7 +476,7 @@ return {
 ";
 
         internal static string NewNode(string name) =>
-$@"-- {name}.lua: a custom node. Save it and graphs using it reload.
+$@"-- {name}.lua: a custom node. Save it and circuits using it reload.
 return {{
   help = ""what this node does"",
   category = ""Custom"",
@@ -341,7 +586,7 @@ return {{
                 GUILayout.EndHorizontal();
 
                 if (!string.IsNullOrEmpty(shown)) GUILayout.Label("<color=#ff8a80>" + (syntax != "" ? "Syntax: " : "Won't load: ") + shown + "</color>", Rich());
-                else if (!Dirty && type != null) GUILayout.Label("<color=#a1ffe0>Loaded. Graphs using it run this version.</color>", Rich());
+                else if (!Dirty && type != null) GUILayout.Label("<color=#a1ffe0>Loaded. Circuits using it run this version.</color>", Rich());
                 if (message != "") GUILayout.Label(message);
             }
 
@@ -418,7 +663,7 @@ return {{
                     File.WriteAllText(file, text.Replace("\n", Environment.NewLine));
                     saved = text;
                     fileTime = File.GetLastWriteTimeUtc(file);
-                    message = "Saved " + DateTime.Now.ToString("HH:mm:ss") + ". Graphs using it reload in a second.";
+                    message = "Saved " + DateTime.Now.ToString("HH:mm:ss") + ". Circuits using it reload in a second.";
                     ScanNodesSoon();
                 }
                 catch (Exception e) { message = "Couldn't save: " + e.Message; }

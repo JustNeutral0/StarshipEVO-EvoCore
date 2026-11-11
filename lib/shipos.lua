@@ -1,12 +1,16 @@
--- shipos: a small ship operating system for a Lua Computer and its monitors. It boots, puts a status bar and a row
--- of app tabs on every linked monitor, raises alerts, and has a crew assistant: a scripted NPC (no real AI) who
--- watches the ship and speaks up. Start it from a script with
+-- shipos: a small ship operating system for a Lua Computer and its monitors. It boots to a desktop of app icons on
+-- every linked monitor; an app opens in a window (title bar, close button) over a taskbar (the start button, a
+-- button per app, the clock). It raises alerts, and has a crew assistant: a scripted NPC (no real AI) who watches
+-- the ship and speaks up. Start it from a script with
 --   shipos.run{ crew = { name = "IRIS", style = "calm" } }
 -- Add your own apps with shipos.app{...} and your own assistant rules with shipos.rule{...} before shipos.run.
+-- Apps installed on the computer (UserData\EvoCore\apps, the APPS tab; EvoCore's Apps.cs) join the desktop and taskbar after the
+-- built-in ones (STATUS, CREW, LOG, SERVER, APPS). An app that errors is marked crashed instead of stopping the OS.
 -- Needs ui.lua (the stock lib). EvoCore's stock library (UserData\EvoCore\lib\shipos.lua): edit away; delete this
 -- file to get the stock one back.
-shipos = { name = "HELM", version = "0.1" }
+shipos = { name = "HELM", version = "0.3" }
 
+local store = apps              -- the computer's installed apps (nil on a text screen); `apps` below is the tabs
 local apps, order = {}, {}      -- id -> app, ids in tab order
 local rules = {}                -- assistant rules, checked every tick after boot
 local screens = {}              -- per display: { key, app, page }
@@ -18,7 +22,7 @@ local s = {}                    -- this tick's readings (shipos.state)
 shipos.state = s
 
 local BOOT = 3.5                -- seconds of boot screen
-local TOP, TABS = 18, 28        -- status bar and tab row heights
+local TOP, TABS = 18, 26        -- window title bar and taskbar heights
 
 local function th() return ui.theme end
 local function opt(o, k, v) if o ~= nil and o[k] ~= nil then return o[k] end return v end
@@ -299,22 +303,58 @@ local function top_alert()
   return nil
 end
 
+-- Whether an alert is on the status bar (for the ship os node's alert output).
+function shipos.alert() return top_alert() ~= nil end
+
 -- Apps ----------------------------------------------------------------------------------------------------------------
--- app = { id, title, short (tab label on narrow screens), draw(d, x, y, w, h, scr), touch(button, x, y, scr), tick(dt) }
+-- app = { id, title, short (taskbar label), draw(d, x, y, w, h, scr), touch(button, x, y, scr), tick(dt),
+--         icon(d, x, y, r, color) (its desktop icon, drawn round x, y within r; its short name when it has none) }
 -- draw gets the content area; buttons it makes should have names unique to the app (they come back to touch).
 
+local defined = {}              -- ids of the tabs made with shipos.app, in the order they were made
+local installed = {}            -- ids of the computer's installed apps, in install order (below)
+
+-- The tab order: cfg.apps when the script gives one (installed apps it leaves out go after it, then APPS); else
+-- STATUS, the installed apps, then the other built-in tabs. SERVER only on a mainframe, APPS only on a computer.
+local function arrange()
+  local keep, seen = {}, {}
+  local function add(id)
+    if seen[id] or not apps[id] then return end
+    if (id == "server" and not mainframe) or (id == "apps" and not store) then return end
+    seen[id] = true
+    keep[#keep + 1] = id
+  end
+  if cfg.apps then
+    for _, id in ipairs(cfg.apps) do add(id) end
+    for _, id in ipairs(installed) do add(id) end
+    add("apps")
+  else
+    add("status")
+    for _, id in ipairs(installed) do add(id) end
+    for _, id in ipairs(defined) do add(id) end
+  end
+  order = keep
+end
+
 function shipos.app(app)
-  if not apps[app.id] then order[#order + 1] = app.id end
+  if not apps[app.id] then defined[#defined + 1] = app.id end
   apps[app.id] = app
+  arrange()
   return app
 end
 
 -- Status: the four levels as rings, heat and power flow below.
 shipos.app{ id = "status", title = "STATUS", short = "STA",
+  icon = function(d, x, y, r, c)
+    d.arc(x, y, r, -120, 120, c, math.max(1.5, r * 0.18))
+    d.line(x, y, x + r * 0.5, y - r * 0.45, c, math.max(1.5, r * 0.14))
+    d.circle(x, y, r * 0.16, c)
+  end,
   draw = function(d, x, y, w, h)
     local t = th()
-    local n = 4
-    local r = math.min((w / n) * 0.36, h * 0.24)
+    -- Four across, or two by two on a narrow screen (a tall Lua Screen Wedge), where four labels can't fit.
+    local n = w >= 150 and 4 or 2
+    local r = math.min((w / n) * 0.36, h * (n == 4 and 0.24 or 0.16))
     local cy = y + r + 6
     local rings = {
       { s.fuel, "FUEL", { warn = 0.25, alert = 0.08, low = true } },
@@ -323,9 +363,10 @@ shipos.app{ id = "status", title = "STATUS", short = "STA",
       { s.shield_on and s.shield or 0, s.shield_on and "SHIELD" or "SHLD OFF", { warn = 0.3, low = true } },
     }
     for i, ring in ipairs(rings) do
-      ui.ring(d, x + w * (i - 0.5) / n, cy, r, ring[1], { label = ring[2], warn = ring[3].warn, alert = ring[3].alert, low = true })
+      local col, row = (i - 1) % n, math.floor((i - 1) / n)
+      ui.ring(d, x + w * (col + 0.5) / n, cy + row * (2 * r + 8), r, ring[1], { label = ring[2], width = w / n - 3, warn = ring[3].warn, alert = ring[3].alert, low = true })
     end
-    local my = cy + r + 12
+    local my = cy + (math.ceil(#rings / n) - 1) * (2 * r + 8) + r + 12
     ui.meter(d, x + 4, my, w - 8, s.heat, "HEAT", { warn = 0.7, alert = 0.85 })
     local flow = s.power_in - s.power_use
     ui.rows(d, x + 4, my + 32, w - 8, {
@@ -334,85 +375,16 @@ shipos.app{ id = "status", title = "STATUS", short = "STA",
     }, { size = 11 })
   end }
 
--- Nav: speed, where we are, the target, a speed history.
-local speed_hist, hist_t = {}, 0
-shipos.app{ id = "nav", title = "NAVIGATION", short = "NAV",
-  tick = function(dt)
-    hist_t = hist_t + dt
-    if hist_t >= 0.5 then hist_t = 0; speed_hist = ui.history("shipos_speed", s.speed, 60) end
-  end,
-  draw = function(d, x, y, w, h)
-    local t = th()
-    local r = math.min(h * 0.3, w * 0.2)
-    ui.gauge(d, x + r + 6, y + r + 4, r, s.speed, { max = math.max(100, math.ceil(s.speed / 100) * 100), format = "%.0f", label = "M/S" })
-    local rx, rw = x + 2 * r + 20, w - 2 * r - 24
-    local mode = s.warping and "WARP" or s.cruising and "CRUISE" or "NORMAL"
-    ui.rows(d, rx, y + 2, rw, {
-      { "LOCATION", s.planet ~= "" and fit(d, s.planet, 11, rw * 0.6) or "open space" },
-      { "ALTITUDE", s.altitude and distance(s.altitude) or "-" },
-      { "DRIVE", mode },
-      { "TARGET", s.target and fit(d, s.target.name, 11, rw * 0.6) or "none" },
-      { "RANGE", s.target and distance(s.target.distance) or "-" },
-    }, { size = 11 })
-    local gy = y + 2 * r + 14
-    if h - (gy - y) > 24 then ui.graph(d, x + 2, gy, w - 4, h - (gy - y) - 2, speed_hist, { min = 0, label = "SPEED" }) end
-  end }
-
--- Systems: the ship's labelled logic blocks as switches.
-local sys_list, sys_t = {}, -10
-local function refresh_systems()
-  sys_list = {}
-  local found = ship.blocks()
-  if found then for _, b in ipairs(found) do sys_list[#sys_list + 1] = b end end
-end
-shipos.app{ id = "systems", title = "SYSTEMS", short = "SYS",
-  tick = function()
-    if time() - sys_t > 3 then sys_t = time(); refresh_systems() end
-  end,
-  draw = function(d, x, y, w, h, scr)
-    local t = th()
-    if #sys_list == 0 then
-      local lines = wrap(d, "No labelled blocks. Name doors, lights and switches with the multitool's Tag mode and they show up here.", 11, w - 16)
-      for i, l in ipairs(lines) do d.text(x + w / 2, y + 10 + (i - 1) * 15, l, t.muted, 11, "center") end
-      return
-    end
-    local cols = w >= 280 and 2 or 1
-    local bh, gap = 24, 4
-    local rows = math.max(1, math.floor((h - 26) / (bh + gap)))
-    local per = rows * cols
-    local pages = math.max(1, math.ceil(#sys_list / per))
-    scr.page = math.min(scr.page or 1, pages)
-    local bw = (w - (cols - 1) * gap) / cols
-    for k = 1, per do
-      local i = (scr.page - 1) * per + k
-      local b = sys_list[i]
-      if not b then break end
-      local col, row = (k - 1) % cols, math.floor((k - 1) / cols)
-      local on = b.on
-      local label = fit(d, b.name, 11, bw - 40)
-      d.button("sys:" .. i, x + col * (bw + gap), y + row * (bh + gap), bw, bh, label, on and t.fg or t.muted)
-      d.text(x + col * (bw + gap) + bw - 6, y + row * (bh + gap) + 6, on and "ON" or "OFF", on and t.fg or t.muted, 10, "right")
-    end
-    local py = y + h - 22
-    if pages > 1 then
-      d.button("sys_prev", x, py, 40, 20, "<", t.accent)
-      d.button("sys_next", x + w - 40, py, 40, 20, ">", t.accent)
-    end
-    d.text(x + w / 2, py + 4, string.format("%d BLOCKS  %d/%d", #sys_list, scr.page, pages), t.muted, 10, "center")
-  end,
-  touch = function(button, x, y, scr)
-    if button == "sys_prev" then scr.page = math.max(1, (scr.page or 1) - 1)
-    elseif button == "sys_next" then scr.page = (scr.page or 1) + 1
-    else
-      local i = tonumber(button:match("^sys:(%d+)$"))
-      local b = i and sys_list[i]
-      if b then b.toggle(); shipos.log((b.on and "ON  " or "OFF ") .. b.name) end
-    end
-  end }
-
 -- Server: the mainframe's racks, load and power draw (only on a mainframe; `mainframe` is nil elsewhere).
 local load_hist, load_t = {}, 0
 shipos.app{ id = "server", title = "SERVER", short = "SRV",
+  icon = function(d, x, y, r, c)
+    for i = 0, 2 do
+      local ry = y - r * 0.9 + i * r * 0.64
+      d.box(x - r * 0.85, ry, r * 1.7, r * 0.5, c, math.max(1, r * 0.1))
+      d.rect(x - r * 0.6, ry + r * 0.17, r * 0.2, r * 0.16, c)
+    end
+  end,
   tick = function(dt)
     load_t = load_t + dt
     if mainframe and load_t >= 0.5 then load_t = 0; load_hist = ui.history("shipos_load", mainframe.load, 60) end
@@ -455,6 +427,7 @@ end
 
 -- Crew: the assistant, what it said, and things to ask it.
 shipos.app{ id = "crew", title = "CREW", short = "CRW",
+  icon = function(d, x, y, r, c) shipos.portrait(d, x, y, r * 0.85, c) end,
   draw = function(d, x, y, w, h)
     local t = th()
     local crew = cfg.crew or {}
@@ -491,6 +464,9 @@ shipos.app{ id = "crew", title = "CREW", short = "CRW",
 
 -- Log: everything shipos.log got, newest at the bottom.
 shipos.app{ id = "log", title = "LOG", short = "LOG",
+  icon = function(d, x, y, r, c)
+    for i = 0, 3 do d.rect(x - r * 0.8, y - r * 0.8 + i * r * 0.48, r * (i == 3 and 0.9 or 1.6), r * 0.2, c) end
+  end,
   draw = function(d, x, y, w, h)
     local t = th()
     local size = 10
@@ -504,12 +480,232 @@ shipos.app{ id = "log", title = "LOG", short = "LOG",
     end
   end }
 
+-- Installed apps -------------------------------------------------------------------------------------------------------
+-- Apps from the computer's store (`apps` in Lua, EvoCore's Apps.cs) run like the tabs above, each in its own
+-- environment with its own saved `data`. Their calls go through run_app, so one that errors is marked crashed.
+
+-- Calls app[name](...) unless the app crashed; an error marks it crashed and logs it.
+local function run_app(app, name, ...)
+  local f = app[name]
+  if not f or app.crashed then return end
+  local ok, err = pcall(f, ...)
+  if not ok then
+    app.crashed = tostring(err)
+    shipos.log(app.title .. " crashed: " .. app.crashed, "alert")
+  end
+end
+shipos.run_app = run_app
+
+-- A circuit app (EvoCore Apps.cs builds its chunk): its Display nodes draw during its tick onto a recorder, which stands
+-- in for its monitor; draw replays that inside the tab, moved to the tab's corner. Touches on its buttons go to its own
+-- on_touch, and are let go of on its next tick (the OS only hears presses).
+-- Which arguments of each drawing call are x, y pairs (the rest are sizes, colours, text).
+local XY = { button = { 2 }, line = { 1, 3 }, tri = { 1, 3, 5 } }
+-- ...and the arguments that are lengths (sizes, radii, thicknesses, text size), scaled with them.
+local LEN = { rect = { 3, 4 }, box = { 3, 4, 6 }, bar = { 3, 4 }, line = { 6 }, arc = { 3, 7 }, ring = { 3, 5 }, circle = { 3 },
+  text = { 5 }, button = { 4, 5 } }
+local unpack_ = table.unpack or unpack
+
+-- How far right and down one recorded drawing reaches (for fitting a circuit app into its tab).
+local function extent(d, name, a, mx, my)
+  local function n(i, default) return type(a[i]) == "number" and a[i] or default end
+  if name == "rect" or name == "box" or name == "bar" then return math.max(mx, n(1, 0) + n(3, 0)), math.max(my, n(2, 0) + n(4, 0))
+  elseif name == "button" then return math.max(mx, n(2, 0) + n(4, 0)), math.max(my, n(3, 0) + n(5, 0))
+  elseif name == "line" then return math.max(mx, n(1, 0), n(3, 0)), math.max(my, n(2, 0), n(4, 0))
+  elseif name == "tri" then return math.max(mx, n(1, 0), n(3, 0), n(5, 0)), math.max(my, n(2, 0), n(4, 0), n(6, 0))
+  elseif name == "arc" or name == "ring" or name == "circle" then return math.max(mx, n(1, 0) + n(3, 0)), math.max(my, n(2, 0) + n(3, 0))
+  elseif name == "text" then
+    local size = n(5, 12)
+    local wide = d.measure(tostring(a[3] or ""), size, a[7])
+    local left = a[6] == "right" and n(1, 0) - wide or a[6] == "center" and n(1, 0) - wide / 2 or n(1, 0)
+    return math.max(mx, left + wide), math.max(my, n(2, 0) + size)
+  end
+  return mx, my
+end
+
+function shipos.graph_app(title, short, tick, on_touch, set_display)
+  local calls, size, real, ox, oy, pressed, scale = {}, { w = 300, h = 200 }, nil, 0, 0, false, 1
+  local recorder = setmetatable({ present = true }, { __index = function(_, k)
+    if k == "width" then return size.w elseif k == "height" then return size.h end
+    if k == "measure" then return function(...) return real and real.measure(...) or 0 end end
+    if k == "hover" then return function() return nil end end
+    if k == "clear" then return function() calls = {} end end
+    return function(...) calls[#calls + 1] = { k, select("#", ...), { ... } } end
+  end })
+  set_display(recorder, { count = 1, get = function() return recorder end })
+  return {
+    title = title, short = short, graph = true,
+    tick = function(dt)
+      if pressed and on_touch then pressed = false; on_touch(0, 0, 1, false, nil) end
+      if tick then tick(dt) end
+    end,
+    draw = function(d, x, y, w, h)
+      real, ox, oy, size.w, size.h = d, x, y, w, h
+      -- A circuit laid out bigger than the tab (its nodes have fixed places) is shrunk evenly to fit, sizes and all.
+      local mx, my = 0, 0
+      for _, c in ipairs(calls) do mx, my = extent(d, c[1], c[3], mx, my) end
+      scale = math.min(1, w / math.max(1, mx), h / math.max(1, my))
+      for _, c in ipairs(calls) do
+        local name, n, args = c[1], c[2], {}
+        for i = 1, n do args[i] = c[3][i] end
+        for _, at in ipairs(XY[name] or { 1 }) do
+          if type(args[at]) == "number" then args[at] = args[at] * scale + x end
+          if type(args[at + 1]) == "number" then args[at + 1] = args[at + 1] * scale + y end
+        end
+        for _, at in ipairs(LEN[name] or {}) do
+          if type(args[at]) == "number" then args[at] = args[at] * scale end
+        end
+        local f = d[name]
+        if f then f(unpack_(args, 1, n)) end
+      end
+    end,
+    touch = function(button, x, y)
+      if on_touch then pressed = true; on_touch((x - ox) / scale, (y - oy) / scale, 1, true, button) end
+    end,
+  }
+end
+
+-- Loads an installed app and runs its file: the table it returns is the app.
+local function load_app(id)
+  local chunk, err = store.load(id)
+  local app
+  if chunk then
+    local ok, res = pcall(chunk)
+    if ok and type(res) == "table" then app = res
+    elseif ok then err = "its file has to end with return { title = ..., draw = function ... }"
+    else err = tostring(res) end
+  end
+  app = app or {}
+  app.id, app.installed = id, true
+  app.title = app.title or id:upper()
+  app.short = app.short or app.title:sub(1, 3)
+  if err then app.crashed = err; shipos.log(app.title .. " didn't load: " .. err, "alert") end
+  return app
+end
+
+-- Makes the tabs match the store: drops removed apps, loads new ones (or `reload`, after an update), keeps the rest.
+-- An installed app named like a built-in tab is left out (the built-in one keeps the name).
+local function sync_installed(reload)
+  if not store then return end
+  local want, wanted = {}, {}
+  for _, a in ipairs(store.list()) do want[#want + 1] = a.id; wanted[a.id] = true end
+  for id, a in pairs(apps) do if a.installed and not wanted[id] then apps[id] = nil end end
+  for _, id in ipairs(want) do
+    local a = apps[id]
+    if not a or (a.installed and id == reload) then apps[id] = load_app(id)
+    elseif not a.installed and id ~= reload then shipos.log("App " .. id .. " has a built-in app's name; rename its file", "warn") end
+  end
+  installed = want
+  arrange()
+  -- Screens showing an app that's gone go back to the desktop.
+  for _, scr in ipairs(screens) do if scr.app ~= "home" and not apps[scr.app] then scr.app = "home"; scr.page = 1 end end
+end
+shipos.sync_installed = sync_installed
+
+-- Apps: what's installed and what can be, with the computer's slots.
+local store_rows, store_t = {}, -10
+local function refresh_store()
+  store_rows = {}
+  if not store then return end
+  for _, a in ipairs(store.list()) do store_rows[#store_rows + 1] = { id = a.id, size = a.size, about = a.about, installed = true } end
+  for _, a in ipairs(store.available()) do
+    if not a.installed then store_rows[#store_rows + 1] = { id = a.id, size = a.size, about = a.about, kind = a.kind } end
+  end
+end
+
+-- A touch button whose label shrinks to fit it (display.button draws its label at one size, which runs over a small
+-- button on a narrow screen).
+function shipos.button(d, name, x, y, w, h, label, color)
+  local size = math.min(18, h * 0.55)
+  local fit = ui.fit(d, label, size, w - 4)
+  if fit >= size then d.button(name, x, y, w, h, label, color); return end
+  d.button(name, x, y, w, h, "", color)
+  d.text(x + w / 2, y + (h - fit) / 2 - 1, label, color, fit, "center")
+end
+
+shipos.app{ id = "apps", title = "APPS", short = "APP",
+  icon = function(d, x, y, r, c)
+    local q = r * 0.7
+    for i = 0, 3 do d.rect(x - r * 0.8 + (i % 2) * (q + r * 0.2), y - r * 0.8 + math.floor(i / 2) * (q + r * 0.2), q, q, c) end
+  end,
+  tick = function()
+    if time() - store_t > 5 then store_t = time(); refresh_store() end
+  end,
+  draw = function(d, x, y, w, h, scr)
+    local t = th()
+    if not store then d.text(x + w / 2, y + 20, "No app storage here", t.muted, 12, "center"); return end
+    d.text(x + 2, y + 2, string.format("SLOTS %d / %d", store.used, store.slots), store.used >= store.slots and t.warn or t.accent, 11, "left", "display")
+    -- Wide: one line per app (name and description, state, button). Narrow: two, the name across the whole row on
+    -- top, the state and a smaller button under it.
+    local bw = math.min(80, math.floor(w * 0.42))
+    local wide = w - bw - 100 >= 60
+    local rh, gap, top = wide and 30 or 40, 3, y + 20
+    local per = math.max(1, math.floor((h - 46) / (rh + gap)))
+    local pages = math.max(1, math.ceil(#store_rows / per))
+    scr.page = math.min(scr.page or 1, pages)
+    if #store_rows == 0 then d.text(x + w / 2, top + 10, "No apps in UserData\\EvoCore\\apps", t.muted, 11, "center") end
+    for k = 1, per do
+      local i = (scr.page - 1) * per + k
+      local row = store_rows[i]
+      if not row then break end
+      local ry = top + (k - 1) * (rh + gap)
+      local app = row.installed and apps[row.id]
+      local title = app and app.title or row.id:upper()
+      local state = not row.installed and string.format("%s %.1f KB", row.kind == "graph" and "CIRCUIT" or "LUA", row.size / 1024)
+        or app and app.crashed and "CRASHED" or "INSTALLED"
+      local color = app and app.crashed and t.alert or row.installed and t.fg or t.text
+      d.rect(x, ry, w, rh, t.panel)
+      local label, bcolor = row.installed and "REMOVE" or "INSTALL", row.installed and t.muted or t.accent
+      if wide then
+        local tw = w - bw - 100
+        d.text(x + 6, ry + 3, shipos.fit(d, title, 11, tw, "display"), color, 11, "left", "display")
+        d.text(x + 6, ry + 16, shipos.fit(d, row.about ~= "" and row.about or "-", 9, tw), t.muted, 9)
+        d.text(x + w - bw - 8, ry + 9, state, color, 10, "right")
+        shipos.button(d, "store:" .. i, x + w - bw - 4, ry + 4, bw, rh - 8, label, bcolor)
+      else
+        d.text(x + 6, ry + 3, shipos.fit(d, title, 11, w - 12, "display"), color, 11, "left", "display")
+        d.text(x + 6, ry + 23, state, color, ui.fit(d, state, 9, w - bw - 16), "left")
+        shipos.button(d, "store:" .. i, x + w - bw - 4, ry + 19, bw, 18, label, bcolor)
+      end
+    end
+    local py = y + h - 22
+    if pages > 1 then
+      d.button("store_prev", x, py, 40, 20, "<", t.accent)
+      d.button("store_next", x + w - 40, py, 40, 20, ">", t.accent)
+      d.text(x + w / 2, py + 4, string.format("%d/%d", scr.page, pages), t.muted, 10, "center")
+    end
+  end,
+  touch = function(button, x, y, scr)
+    if button == "store_prev" then scr.page = math.max(1, (scr.page or 1) - 1); return end
+    if button == "store_next" then scr.page = (scr.page or 1) + 1; return end
+    local i = tonumber(button:match("^store:(%d+)$"))
+    local row = i and store_rows[i]
+    if not row or not store then return end
+    if row.installed then
+      local title = apps[row.id] and apps[row.id].title or row.id
+      if store.remove(row.id) then shipos.log("Removed " .. title) end
+    else
+      local ok, why = store.install(row.id)
+      if ok then shipos.log("Installed " .. row.id, "good") else shipos.log("Can't install " .. row.id .. ": " .. tostring(why), "warn") end
+    end
+    sync_installed()
+    refresh_store()
+  end }
+
 -- Drawing ------------------------------------------------------------------------------------------------------------
+
+-- The screen's own background, the theme's dark panel unless the script gives one (shipos.run{ background = ... }):
+-- otherwise a stock monitor shows its paint behind the picture, and its bevel carries that paint on round the edge.
+local function backdrop(d, scr)
+  local want = cfg.background or th().panel
+  if scr.background ~= want then d.background = want; scr.background = want end
+end
 
 local function draw_boot(d, scr)
   local t = th()
   local w, h = d.width, d.height
   local e = time() - boot_at
+  backdrop(d, scr)
   d.clear()
   d.text(w / 2, h * 0.18, shipos.name, t.accent, 34, "center", "display")
   d.text(w / 2, h * 0.18 + 38, "SHIP OS " .. shipos.version, t.muted, 11, "center")
@@ -533,25 +729,115 @@ local function draw_boot(d, scr)
   d.bar(w / 2 - bw / 2, h - 18, bw, 4, math.min(1, e / BOOT), t.accent, t.dim)
 end
 
+-- An app's desktop icon: its own, or its short name.
+local function draw_icon(d, a, x, y, r, color)
+  if a.icon and not a.crashed and pcall(a.icon, d, x, y, r, color) then return end
+  local label = a.short or a.title:sub(1, 3)
+  local size = ui.fit(d, label, r * 0.9, r * 1.9, "display")
+  d.text(x, y - size * 0.6, label, color, size, "center", "display")
+end
+
+-- The desktop: every app as an icon, in a grid that shrinks until they all fit.
+local function draw_desktop(d, scr, w, h)
+  local t = th()
+  local edge = math.max(6, w * 0.07)
+  d.text(edge, 4, shipos.name, t.accent, 12, "left", "display")
+  local ver = "SHIP OS " .. shipos.version
+  if d.measure(ver, 9) < w - 2 * edge - d.measure(shipos.name, 12, "display") - 8 then d.text(w - edge, 6, ver, t.muted, 9, "right") end
+  local top, ah, aw = TOP + 6, h - TOP - TABS - 10, w - 8
+  local n = #order
+  local cell, cols, rows = 76
+  while true do
+    cols, rows = math.max(1, math.floor(aw / cell)), math.max(1, math.floor(ah / cell))
+    if cols * rows >= n or cell <= 34 then break end
+    cell = cell - 2
+  end
+  cols = math.min(cols, n)
+  local gx = (w - cols * cell) / 2
+  local size = cell * 0.58
+  local ls = math.max(7, math.min(10, cell * 0.15))
+  for i, id in ipairs(order) do
+    if i > cols * rows then break end
+    local a = apps[id]
+    local cx = gx + ((i - 1) % cols + 0.5) * cell
+    local ty = top + math.floor((i - 1) / cols) * cell
+    local color = a.crashed and t.alert or t.fg
+    d.rect(cx - size / 2, ty, size, size, t.dim)
+    d.button("app:" .. id, cx - size / 2, ty, size, size, "", color)
+    draw_icon(d, a, cx, ty + size / 2, size * 0.3, color)
+    local label = d.measure(a.title, ls) <= cell - 4 and a.title or (a.short or a.title:sub(1, 3))
+    d.text(cx, ty + size + 3, label, t.text, ls, "center")
+  end
+end
+
+-- The taskbar: the start button (to the desktop), a button per app as far as they fit (the rest are on the desktop),
+-- and the clock, with a blinking mark in front of it during an alert.
+local function draw_taskbar(d, scr, w, h, alert)
+  local t = th()
+  local y, bh = h - TABS, TABS - 6
+  d.rect(0, y, w, TABS, t.dim)
+  local sw = math.min(52, w * 0.3)
+  shipos.button(d, "os:home", 3, y + 3, sw, bh, shipos.name, scr.app == "home" and t.accent or t.fg)
+  local right = clock(time() - boot_at)
+  local cw = d.measure(right, 10) + 10
+  d.text(w - 5, y + TABS / 2 - 7, right, t.muted, 10, "right")
+  if alert and math.floor(time() * 2) % 2 == 0 then d.text(w - cw - 2, y + TABS / 2 - 8, "!", t.alert, 12, "right", "display"); end
+  if alert then cw = cw + 10 end
+  local x0 = 3 + sw + 4
+  local room = w - cw - x0
+  local n = #order
+  local tw = (room - (n - 1) * 3) / n
+  if tw < 30 then tw = 30; n = math.max(0, math.floor((room + 3) / 33)) end
+  tw = math.min(tw, 60)
+  for i = 1, n do
+    local id = order[i]
+    local a = apps[id]
+    shipos.button(d, "app:" .. id, x0 + (i - 1) * (tw + 3), y + 3, tw, bh, a.short or a.title:sub(1, 3), id == scr.app and t.accent or t.muted)
+  end
+end
+
 local function draw_screen(d, scr)
   local t = th()
   local w, h = d.width, d.height
   if w <= 0 then return end
   if not booted then draw_boot(d, scr); return end
+  backdrop(d, scr)
   d.clear()
-  local app = apps[scr.app] or apps[order[1]]
-  -- Status bar: OS and app on the left, an alert or the clock on the right.
   local alert = top_alert()
-  if alert and math.floor(time() * 2) % 2 == 0 then d.rect(0, 0, w, TOP, t.alert) else d.rect(0, 0, w, TOP, t.dim) end
-  local fg = alert and math.floor(time() * 2) % 2 == 0 and t.back or t.accent
-  d.text(6, 3, shipos.name, fg, 11, "left", "display")
-  d.text(6 + d.measure(shipos.name, 11, "display") + 8, 3, app.title, alert and fg or t.text, 11)
-  local right = alert and alert.label or clock(time() - boot_at)
-  d.text(w - 6, 3, right, alert and fg or t.muted, 11, "right")
-  -- The app.
+  local app = apps[scr.app]
   local cy, ch = TOP + 4, h - TOP - TABS - 8
-  app.draw(d, 6, cy, w - 12, ch, scr)
-  -- The assistant, over the bottom of other apps while it talks.
+  if not app then
+    scr.app = "home"
+    draw_desktop(d, scr, w, h)
+  else
+    -- The window: a title bar (it flashes, with the alert's name, during an alert) with a close button, then the app.
+    local flash = alert and math.floor(time() * 2) % 2 == 0
+    d.rect(0, 0, w, TOP, flash and t.alert or t.dim)
+    d.box(1, TOP, w - 2, h - TOP - TABS, t.dim, 1)
+    local fg = flash and t.back or t.accent
+    -- In from the edges by a share of the width: monitors cut their top corners off.
+    local edge = math.max(6, w * 0.07)
+    local xw = 16
+    shipos.button(d, "os:close", w - edge - xw, 2, xw, TOP - 4, "X", flash and t.back or t.muted)
+    local room = w - 2 * edge - xw - 6
+    local title = app.title
+    if d.measure(title, 11, "display") > room then title = app.short or "" end
+    d.text(edge, 3, title, fg, 11, "left", "display")
+    if alert then
+      local tx = edge + d.measure(title, 11, "display") + 8
+      local left = w - edge - xw - 6 - tx
+      if left > 30 then d.text(w - edge - xw - 6, 3, alert.label, flash and fg or t.alert, ui.fit(d, alert.label, 11, left), "right") end
+    end
+    if app.crashed then
+      d.text(w / 2, cy + 10, app.title .. " CRASHED", t.alert, 14, "center", "display")
+      local lines = wrap(d, app.crashed, 10, w - 24)
+      for i, l in ipairs(lines) do d.text(12, cy + 32 + (i - 1) * 13, l, t.text, 10) end
+      d.text(w / 2, cy + ch - 14, "Fix it, then reinstall it from APPS", t.muted, 10, "center")
+    else
+      run_app(app, "draw", d, 6, cy, w - 12, ch, scr)
+    end
+  end
+  -- The assistant, over the bottom of whatever is open while it talks.
   if talk.now and scr.app ~= "crew" then
     local text = talk.now.text:sub(1, math.floor(talk.shown))
     local lines = wrap(d, text, 11, w - 52)
@@ -562,15 +848,7 @@ local function draw_screen(d, scr)
     shipos.portrait(d, 20, by + bh / 2, 11, level_color(talk.now.level))
     for i, l in ipairs(lines) do d.text(38, by + 5 + (i - 1) * 14, l, t.text, 11) end
   end
-  -- Tabs.
-  local n = #order
-  local tw = (w - 8 - (n - 1) * 3) / n
-  for i, id in ipairs(order) do
-    local a = apps[id]
-    local label = tw >= 52 and a.title or (a.short or a.title:sub(1, 3))
-    if d.measure(label, 11) > tw - 6 then label = a.short or a.title:sub(1, 3) end
-    d.button("app:" .. id, 4 + (i - 1) * (tw + 3), h - TABS, tw, TABS - 4, label, id == scr.app and t.accent or t.muted)
-  end
+  draw_taskbar(d, scr, w, h, alert)
 end
 
 local function each_screen(f)
@@ -580,7 +858,7 @@ local function each_screen(f)
   end
 end
 
--- Find the displays (by declared port names, else by number) and give each a starting app.
+-- Find the displays (by declared port names, else by number); a new one starts on the desktop.
 local function find_screens()
   local keys = {}
   if cfg.displays then for _, name in ipairs(cfg.displays) do keys[#keys + 1] = name end
@@ -591,7 +869,7 @@ local function find_screens()
   for i, k in ipairs(keys) do
     local scr = old[tostring(k)]
     if not scr then
-      local start = cfg.screens and cfg.screens[k] or order[((i - 1) % #order) + 1]
+      local start = cfg.screens and cfg.screens[k] or "home"   -- the desktop, unless the script names an app
       scr = { key = k, app = start, page = 1 }
     end
     fresh[#fresh + 1] = scr
@@ -615,7 +893,7 @@ function shipos.tick(dt)
   end
   if booted then check_rules() end
   talk_tick(dt)
-  for _, id in ipairs(order) do if apps[id].tick then apps[id].tick(dt) end end
+  for _, id in ipairs(order) do run_app(apps[id], "tick", dt) end
   if cfg.on_tick then cfg.on_tick(dt) end
   each_screen(draw_screen)
 end
@@ -626,33 +904,34 @@ function shipos.touch(x, y, screen, down, button)
   for _, c in ipairs(screens) do if tostring(c.key) == tostring(screen) then scr = c end end
   if not scr then return end
   local id = button:match("^app:(.+)$")
-  if id and apps[id] then scr.app = id; scr.page = 1
+  if button == "os:home" or button == "os:close" then scr.app = "home"; scr.page = 1
+  elseif id and apps[id] then scr.app = id; scr.page = 1
   else
     local app = apps[scr.app]
-    if app and app.touch then app.touch(button, x, y, scr) end
+    if app then run_app(app, "touch", button, x, y, scr) end
     if cfg.on_touch then cfg.on_touch(button, x, y, scr) end
   end
   local d = displays.get(scr.key)
   if d and d.present then draw_screen(d, scr) end
 end
 
--- opts: crew = { name, role, call, style ("calm" or "casual"), hold }, apps = { ids in tab order }, displays = {
--- port names }, screens = { [display] = starting app }, rules = false (no stock rules), name (the OS's name),
+-- opts: crew = { name, role, call, style ("calm" or "casual"), hold }, apps = { ids in taskbar order }, displays = {
+-- port names }, screens = { [display] = starting app, or "home" for the desktop }, rules = false (no stock rules),
+-- name (the OS's name),
+-- background (the screens' colour behind everything, and so their bevels'; the theme's dark panel by default),
+-- default_apps = { app ids installed the first time on a computer that never had apps; default nav and systems },
 -- on_tick(dt), on_touch(button, x, y, scr).
 function shipos.run(o)
   cfg = o or {}
   if cfg.name then shipos.name = cfg.name end
   cfg.crew = cfg.crew or {}
-  if not cfg.apps and not mainframe then
-    local keep = {}
-    for _, id in ipairs(order) do if id ~= "server" then keep[#keep + 1] = id end end
-    order = keep
+  -- A computer that never had apps gets the stock ones (NAVIGATION and SYSTEMS were part of the OS before 0.2).
+  if store and store.fresh then
+    for _, id in ipairs(cfg.default_apps or { "nav", "systems" }) do store.install(id) end
   end
-  if cfg.apps then
-    local keep = {}
-    for _, id in ipairs(cfg.apps) do if apps[id] and (id ~= "server" or mainframe) then keep[#keep + 1] = id end end
-    order = keep
-  end
+  read_ship()   -- apps read shipos.state when they load
+  sync_installed()
+  arrange()
   if cfg.rules ~= false then stock_rules() end
   boot_at, booted = time(), false
   math.randomseed(math.floor(time() * 1000) % 2147483647)

@@ -1,0 +1,50 @@
+# trip.circuit: distance flown, time under way and top speed, for this trip and the ship's whole life.
+# title: TRIP
+# short: TRP
+# An app for the ship OS: install it from the APPS tab. The lua node keeps the totals in `data`, which is saved with the
+# computer, so they survive saving, reloading and blueprints. EvoCore's stock app: edit away; delete it to get it back.
+rate 0.1
+node 1 ship value=speed at=0,0
+node 2 ship value=warping at=0,100
+node 3 button label="RESET TRIP" mode=pulse x=4 y=170 w=120 h=22 at=0,200
+node 4 lua inputs=3 outputs=7 at=240,0
+node 5 panel title="THIS TRIP" x=0 y=0 w=180 h=88 at=520,0
+node 6 readout text="DISTANCE {v} km" decimals=1 x=8 y=22 size=11 at=520,100
+node 7 readout text="UNDER WAY {v} h" decimals=2 x=8 y=38 size=11 at=520,200
+node 8 readout text="TOP {v} m/s" x=8 y=54 size=11 at=520,300
+node 9 readout text="AVERAGE {v} m/s" x=8 y=70 size=11 at=520,400
+node 10 panel title=LIFETIME x=0 y=94 w=180 h=72 at=800,0
+node 11 readout text="DISTANCE {v} km" decimals=1 x=8 y=116 size=11 at=800,100
+node 12 readout text="UNDER WAY {v} h" decimals=2 x=8 y=132 size=11 at=800,200
+node 13 readout text="TOP {v} m/s" x=8 y=148 size=11 at=800,300
+code 4
+-- in1 speed (m/s), in2 warping, in3 reset. Totals live in data (saved with the computer).
+-- out1 trip km, out2 trip hours, out3 trip top m/s, out4 trip average m/s, out5 total km, out6 total hours, out7 top m/s
+for _, k in ipairs({ "total", "moving", "top", "trip", "trip_time", "trip_top" }) do data[k] = data[k] or 0 end
+function tick(dt)
+  local v = inputs.get(1)
+  if inputs.on(3) then data.trip, data.trip_time, data.trip_top = 0, 0, 0 end
+  if v >= 0.5 and not inputs.on(2) then   -- warp distance isn't flown distance
+    data.total, data.trip = data.total + v * dt, data.trip + v * dt
+    data.moving, data.trip_time = data.moving + dt, data.trip_time + dt
+    data.top, data.trip_top = math.max(data.top, v), math.max(data.trip_top, v)
+  end
+  outputs.set(1, data.trip / 1000)
+  outputs.set(2, data.trip_time / 3600)
+  outputs.set(3, data.trip_top)
+  outputs.set(4, data.trip_time > 0 and data.trip / data.trip_time or 0)
+  outputs.set(5, data.total / 1000)
+  outputs.set(6, data.moving / 3600)
+  outputs.set(7, data.top)
+end
+end code
+wire 1.speed 4.in1
+wire 2.warping 4.in2
+wire 3.on 4.in3
+wire 4.out1 6.value
+wire 4.out2 7.value
+wire 4.out3 8.value
+wire 4.out4 9.value
+wire 4.out5 11.value
+wire 4.out6 12.value
+wire 4.out7 13.value

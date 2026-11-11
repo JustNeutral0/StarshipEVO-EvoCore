@@ -1,0 +1,9 @@
+# {name}.circuit: shows what "two computers send" sends.
+rate 0.1
+node 1 unbundle channel=link fields="fuel, speed"
+node 2 meter label=FUEL x=10 y=10 w=220
+node 3 readout text="SPEED {v} m/s" x=10 y=50
+node 4 lamp label=LINKED x=20 y=100
+wire 1.fuel 2.value
+wire 1.speed 3.value
+wire 1.linked 4.value

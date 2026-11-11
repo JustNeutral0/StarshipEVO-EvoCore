@@ -7,7 +7,7 @@ using UnityEngine;
 
 // The loader lines (see Loader.cs). A BepInEx build (-p:Loader=BepInEx) uses the [BepInPlugin] on Core instead.
 #if !BEPINEX
-[assembly: MelonLoader.MelonInfo(typeof(EvoCore.Core), "EvoCore", "0.9.84", "Claude")]
+[assembly: MelonLoader.MelonInfo(typeof(EvoCore.Core), "EvoCore", "0.15.0", "Claude")]
 [assembly: MelonLoader.MelonGame("Moonfire Entertainment", "Starship EVO")]
 [assembly: MelonLoader.MelonPriority(-1000)] // before every mod that uses it, so its frame bookkeeping runs first
 #endif
@@ -24,7 +24,7 @@ namespace EvoCore
     // What the other mods stand on: per-save data (Saves), the id registry (Ids), Lua scripts on ships (Lua), homes for simulation work with a
     // frame budget and worker threads (Sim), and frame timing (Perf). See README.md for how a mod uses each.
 #if BEPINEX
-    [BepInEx.BepInPlugin("evo.core", "EvoCore", "0.9.84")]
+    [BepInEx.BepInPlugin("evo.core", "EvoCore", "0.15.0")]
 #endif
     public class Core : EvoMod
     {
@@ -34,9 +34,19 @@ namespace EvoCore
         static Setting<float> frameBudget;
         static Setting<bool> overlay;
         static Setting<int> overlayLines;
+        static Setting<bool> versionWarning;
+        static Setting<bool> graphAutoRun;
+        static Setting<bool> colourHeaders;
 
         public static float FrameBudgetMs => frameBudget?.Value ?? 2f;
         public static int OverlayLines => overlayLines?.Value ?? 6;
+        public static bool VersionWarning => versionWarning?.Value ?? true;
+        public static bool ColourHeaders => colourHeaders?.Value ?? true;
+        public static bool GraphAutoRun
+        {
+            get => graphAutoRun?.Value ?? false;
+            set { if (graphAutoRun != null) graphAutoRun.Value = value; }
+        }
 
         static int mainThread;
 
@@ -55,6 +65,9 @@ namespace EvoCore
             frameBudget = settings.Add("FrameBudgetMs", 2f, "Milliseconds per frame shared by all sliced simulation work");
             overlay = settings.Add("ShowOverlay", false, "Show frame timing per mod in the top right corner");
             overlayLines = settings.Add("OverlayLines", 6, "How many of the costliest mods the overlay lists");
+            versionWarning = settings.Add("VersionWarning", true, "Show a notice when the game isn't the build these mods were made for");
+            colourHeaders = settings.Add("ColourHeaders", true, "Circuit editor: fill each node's title bar with its group's colour (off: a thin stripe under the name)");
+            graphAutoRun = settings.Add("GraphAutoRun", false, "Circuit editor: save and rerun the circuit a moment after each change (a rerun starts its timers and counters again)");
             Lua.Init();
             Monitors.Init();
             Anim.Init();
@@ -66,6 +79,7 @@ namespace EvoCore
         protected override void Tick()
         {
             Perf.EndFrame();
+            GameVersion.Tick();
             Sim.Update();
             Lua.Update();
             Mainframes.Tick();
@@ -84,6 +98,7 @@ namespace EvoCore
             if (overlay.Value && Event.current.type == EventType.Repaint) Perf.DrawOverlay();
             Graphs.Canvas.OnGui();
             LinkPicker.OnGui();
+            GameVersion.Gui();
         }
 
         // ---- Status, for the Core tab and the DevBridge smoke test (get EvoCore.Core.Report()) ----
@@ -92,6 +107,7 @@ namespace EvoCore
         {
             var sb = new StringBuilder();
             sb.AppendLine("Mods: " + string.Join(", ", Mods.Loaded.Select(m => $"{m.Name} {m.Version}").ToArray()));
+            sb.AppendLine(GameVersion.Status());
             sb.AppendLine(Saves.Active ? $"Save: \"{Saves.Character}\", data in {Saves.Root}": "Save: none loaded");
             if (Saves.LastEvent != "") sb.AppendLine("  " + Saves.LastEvent);
             if (Saves.Failures > 0) sb.AppendLine($"  {Saves.Failures} save handler(s) have failed; see the log");

@@ -100,7 +100,7 @@ namespace EvoCore
             // computer took over, without a managed error. Until that's understood, big refits are refused.
             if (r.Gates + r.Delays > MaxLogic || r.Outputs > MaxOutputs)
                 return $"Not refitting {ship.EntityName}: {r.Gates + r.Delays} gates and timers and {r.Outputs} outputs is more than a refit " +
-                       $"handles safely yet (up to {MaxLogic} and {MaxOutputs}). Nothing was changed; the converted graph is in scripts.";
+                       $"handles safely yet (up to {MaxLogic} and {MaxOutputs}). Nothing was changed; the converted circuit is in scripts.";
             var t = new Test { Computer = computer, Ship = ship, Result = r, Blocks = Blocks(ship) };
             t.Plan = r.Refit.Split('\n').Select(l => l.TrimEnd('\r').Split('\t')).Where(w => w.Length >= 3).ToList();
             t.Logic = t.Plan.Where(w => w[0] == "logic").Select(w => t.Blocks.TryGetValue(w[2], out var b) ? b : null).Where(b => b != null).ToList();
@@ -229,7 +229,7 @@ namespace EvoCore
 
         static void Compare(Test t)
         {
-            if (!Lua.Runs(t.Computer)) { t.Differences.Add($"case {t.Case + 1}: the graph wasn't running"); return; }
+            if (!Lua.Runs(t.Computer)) { t.Differences.Add($"case {t.Case + 1}: the circuit wasn't running"); return; }
             var inputs = string.Join(", ", t.Inputs.Select((x, i) => $"{x.port}={t.Cases[t.Case][i]:0}").ToArray());
             foreach (var (block, port, drivers, wire) in t.Outputs)
             {
@@ -238,7 +238,7 @@ namespace EvoCore
                 var match = drivers.Any(d => Math.Abs(d.State - graph) < 0.01);
                 t.Checked++;
                 if (!match && t.Differences.Count < 12)
-                    t.Differences.Add($"{port} ({Lua.Describe(block)}) with {inputs}: old logic {string.Join("/", drivers.Select(d => d.State.ToString("0.##")).ToArray())}, graph {graph:0.##}");
+                    t.Differences.Add($"{port} ({Lua.Describe(block)}) with {inputs}: old logic {string.Join("/", drivers.Select(d => d.State.ToString("0.##")).ToArray())}, circuit {graph:0.##}");
             }
         }
 
@@ -270,7 +270,7 @@ namespace EvoCore
             Lua.RescanSoon();
 
             var report = new StringBuilder();
-            report.Append($"Refitted {t.Ship.EntityName}: {t.Result.Gates} gate(s) and {t.Result.Delays} timer(s) now run as a graph on this computer; " +
+            report.Append($"Refitted {t.Ship.EntityName}: {t.Result.Gates} gate(s) and {t.Result.Delays} timer(s) now run as a circuit on this computer; " +
                           $"{outs} of {t.Result.Outputs} output(s) linked. ");
             var same = t.Differences.Count == 0 && t.Untestable.Count == 0 && t.Notes.Count == 0 && t.Checked > 0;
             if (same)

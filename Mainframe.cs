@@ -74,7 +74,7 @@ namespace EvoCore
         // linked to or from a mainframe. Null for anything else. Cached per frame: displays ask on every draw call.
         public static Mainframe TerminalOf(LuaComputer c)
         {
-            if (c == null || c is Mainframe || c.HasProgram) return null;
+            if (c == null || c is Mainframe || c is ExpansionSlot || c is Workstation || c is SalvageProcessor || c.HasProgram) return null;
             if (cachedFrame != Time.frameCount) { terminalCache.Clear(); cachedFrame = Time.frameCount; }
             if (terminalCache.TryGetValue(c, out var m)) return m;
             try { m = c.Inputs.Concat(c.Outputs).OfType<Mainframe>().FirstOrDefault(); }
@@ -102,6 +102,7 @@ namespace EvoCore
         {
             if (Time.unscaledTime < next) return;
             next = Time.unscaledTime + 0.5f;
+            Buses.Prune();
             all.Clear();
             foreach (var command in CommandManager.commands.Datas)
             {

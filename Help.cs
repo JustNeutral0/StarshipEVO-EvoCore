@@ -125,7 +125,7 @@ namespace EvoCore
             search = GUILayout.TextField(search);
             GUILayout.EndHorizontal();
             listScroll = GUILayout.BeginScrollView(listScroll, GUILayout.Height(height));
-            GUILayout.Label("GRAPH NODES", head);
+            GUILayout.Label("CIRCUIT NODES", head);
             foreach (var group in Nodes().Where(Matches).GroupBy(t => t.Category))
             {
                 GUILayout.Label(group.Key == "" ? "Other" : group.Key, sub);

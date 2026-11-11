@@ -208,7 +208,7 @@ namespace EvoCore
             if (kept.Count > 0)
                 report.AppendLine($"Kept as game blocks: {kept.Count(c => c is CommandEventGate)} event gate(s), {kept.Count(c => c is CommandSequencerController)} sequencer(s)" +
                                   (keptLinked.Count > 0 ? $"; {keptLinked.Count} of them talk to the converted logic through ports." : "."));
-            if (logic.Any(c => c is CommandDelay)) report.AppendLine("Timing: the graph runs every 0.1 s (its rate), so timers and chains settle to the nearest tick; the game's logic reacts within a frame.");
+            if (logic.Any(c => c is CommandDelay)) report.AppendLine("Timing: the circuit runs every 0.1 s (its rate), so timers and chains settle to the nearest tick; the game's logic reacts within a frame.");
             if (logic.Count == 0) report.AppendLine("Nothing to convert: no logic gates or timer gates on this ship.");
 
             r.Graph = Graphs.Write(g, ship.EntityName + " logic");
@@ -228,11 +228,11 @@ namespace EvoCore
             if (r.Gates + r.Delays == 0) return r.Report;
             var name = new string((ship.EntityName ?? "ship").Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch).ToArray()).Trim() + " logic";
             Directory.CreateDirectory(Lua.ScriptsDir);
-            graphPath = Path.Combine(Lua.ScriptsDir, name + ".graph");
+            graphPath = Path.Combine(Lua.ScriptsDir, name + ".circuit");
             File.WriteAllText(graphPath, r.Graph);
             File.WriteAllText(Path.Combine(Lua.ScriptsDir, name + ".refit"), r.Refit);
             File.WriteAllText(Path.Combine(Lua.ScriptsDir, name + " report.txt"), r.Report);
-            return r.Report + $"Written: scripts\\{name}.graph (and .refit, report.txt). Nothing on the ship was changed.";
+            return r.Report + $"Written: scripts\\{name}.circuit (and .refit, report.txt). Nothing on the ship was changed.";
         }
 
         // ---- For DevBridge ----
