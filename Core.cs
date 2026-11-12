@@ -7,7 +7,7 @@ using UnityEngine;
 
 // The loader lines (see Loader.cs). A BepInEx build (-p:Loader=BepInEx) uses the [BepInPlugin] on Core instead.
 #if !BEPINEX
-[assembly: MelonLoader.MelonInfo(typeof(EvoCore.Core), "EvoCore", "0.15.1", "Claude")]
+[assembly: MelonLoader.MelonInfo(typeof(EvoCore.Core), "EvoCore", "0.15.2", "Claude")]
 [assembly: MelonLoader.MelonGame("Moonfire Entertainment", "Starship EVO")]
 [assembly: MelonLoader.MelonPriority(-1000)] // before every mod that uses it, so its frame bookkeeping runs first
 #endif
@@ -24,7 +24,7 @@ namespace EvoCore
     // What the other mods stand on: per-save data (Saves), the id registry (Ids), Lua scripts on ships (Lua), homes for simulation work with a
     // frame budget and worker threads (Sim), and frame timing (Perf). See README.md for how a mod uses each.
 #if BEPINEX
-    [BepInEx.BepInPlugin("evo.core", "EvoCore", "0.15.1")]
+    [BepInEx.BepInPlugin("evo.core", "EvoCore", "0.15.2")]
 #endif
     public class Core : EvoMod
     {

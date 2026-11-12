@@ -50,7 +50,7 @@ namespace EvoCore
             GUILayout.EndHorizontal();
 
             GUILayout.Space(14);
-            var used = new HashSet<string>(Lua.LinksOf(c).Select(l => l.Key));
+            var used = new HashSet<string>(Lua.LinksOf(c).Where(l => l.Kind != "ord").Select(l => l.Key));
             var loose = c.Inputs.Select(x => ("in from", x)).Concat(c.Outputs.Select(x => ("out to", x))).Where(x => !used.Contains(Lua.KeyOf(x.Item2))).ToList();
             GUILayout.Label("LINKS NOT IN A PORT", head);
             if (loose.Count == 0) GUILayout.Label("none", dim);

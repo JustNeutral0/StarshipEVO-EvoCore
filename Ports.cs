@@ -24,8 +24,10 @@ namespace EvoCore
     //    there can't be one each way) is the cable, and both ends send whole messages over it (numbers, text,
     //    tables): ports.send("nav", { heading = 90 }) on one, on_message(port, msg) / ports.last("nav") on the other.
     // PortMap lines, tab separated: in <port> <block> <value> / out <port> <block> / disp <port> <block> /
-    // ch <port> <computer> <their port>,
-    // where a block is "<child entity id>.<instance id>" on the computer's own ship.
+    // ch <port> <computer> <their port> / ord - <block>,
+    // where a block is "<child entity id>.<instance id>" on the computer's own ship. The ord lines are the inputs in
+    // the order they were linked: the game rebuilds a block's incoming links on loading, in whatever order their
+    // senders load, so the computer keeps the order itself.
     public static partial class Lua
     {
         internal class Declared
@@ -77,7 +79,7 @@ namespace EvoCore
             foreach (var line in text.Split('\n'))
             {
                 var w = line.Split('\t');
-                if (w.Length < 3 || (w[0] != "in" && w[0] != "out" && w[0] != "ch" && w[0] != "disp")) continue;
+                if (w.Length < 3 || (w[0] != "in" && w[0] != "out" && w[0] != "ch" && w[0] != "disp" && w[0] != "ord")) continue;
                 list.Add(new PortLink { Kind = w[0], Port = w[1], Key = w[2], Extra = w.Length > 3 ? w[3] : "" });
             }
             portLinks[c] = (text, list);
@@ -89,6 +91,26 @@ namespace EvoCore
             var sb = new StringBuilder();
             foreach (var l in links) sb.Append(l.Kind).Append('\t').Append(l.Port).Append('\t').Append(l.Key).Append('\t').Append(l.Extra ?? "").Append('\n');
             c.SetPorts(sb.ToString());
+        }
+
+        // A new link into the computer: it goes last in the kept order, behind the inputs as they stand now.
+        internal static void NoteLinked(LuaComputer c, ICommand from)
+        {
+            var key = KeyOf(from);
+            if (key == "") return;
+            var links = LinksOf(c).Where(l => l.Kind != "ord").ToList();
+            foreach (var k in c.Inputs.Select(KeyOf).Where(k => k != key).Concat(new[] { key }))
+                links.Add(new PortLink { Kind = "ord", Port = "-", Key = k });
+            Store(c, links);
+        }
+
+        // Incoming links in the kept order; ones it doesn't know (linked before it was kept) stay in the game's order, last.
+        internal static List<ICommand> Ordered(LuaComputer c, List<ICommand> inputs)
+        {
+            var order = LinksOf(c).Where(l => l.Kind == "ord").Select(l => l.Key).ToList();
+            if (order.Count == 0 || inputs.Count < 2) return inputs;
+            int At(ICommand x) { var i = order.IndexOf(KeyOf(x)); return i < 0 ? int.MaxValue : i; }
+            return inputs.OrderBy(At).ToList();
         }
 
         // Puts a block in a port (an input with the value it reads), replacing whatever was there.

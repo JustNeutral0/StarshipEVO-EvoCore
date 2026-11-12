@@ -60,6 +60,13 @@ end
             Put(Part(TabInterior.LIGHT_FLAT, 32));
             Put(Part(TabLogic.SCREEN_TEXT_INPUT, 64));
             Put(Part(TabSystem.SOLAR_PANEL_FLAT, 96));   // links in only through SourceLinks
+            // The other machines SourceLinks lets link in, in a row of their own behind the slab.
+            for (int i = 0; i < Machines.Length; i++)
+            {
+                var machine = Part(Machines[i], MachineX(i));
+                machine.gridPosition = new Vector3i(MachineX(i), 0, MachineZ);
+                Put(machine);
+            }
             System.IO.File.WriteAllText(System.IO.Path.Combine(Lua.ScriptsDir, Label + ".lua"), Script);
             return $"built {Name} {ahead} m ahead; call Wire() in a few seconds";
 
@@ -67,12 +74,55 @@ end
                 player.NetworkedBuilder.LocalVoxelAction(new VoxelActionData { type = VoxelActionType.build, brickData = brick, entityID = rig.ID });
         }
 
-        static ICommand At(int x) => Lua.ShipCommands(rig)
-            .FirstOrDefault(c => c.Snapshot.brickCoord.brickData.gridPosition.x == x && c.Snapshot.brickCoord.brickData.gridPosition.y == 16)?.Now;
+        static readonly Brick[] Machines =
+        {
+            TabStorage.STORAGE_UNIT, TabStorage.TANK, TabStorage.COLLECTOR_INVENTORY, TabSystem.POWER_CELL_BASE, TabSystem.LIFE_SUPPORT,
+            TabStorage.FLUID_HARVESTER, TabStorage.H2_FARM, TabStorage.ASSEMBLER, TabStorage.FURNACE, TabSystem.CRUSHER,
+        };
+        const int MachineZ = 160;
+        static int MachineX(int i) => (i - Machines.Length / 2) * 96;
+
+        // The rig, found again by name after the game was restarted.
+        static ParentEntity Rig => rig != null ? rig : rig = Object.FindObjectsByType<ParentEntity>().FirstOrDefault(e => e.EntityName == Name || e.name == Name);
+
+        static ICommand At(int x) => At(x, 16, 0);
+
+        static ICommand At(int x, int y, int z) => Rig == null ? null : Lua.ShipCommands(rig)
+            .FirstOrDefault(c => c.Snapshot.brickCoord.brickData.gridPosition.Equals(new Vector3i(x, y, z)))?.Now;
+
+        // The same inputs in the game's own order (oldest first while they were linked this session), to compare.
+        public static string GameOrder()
+        {
+            if (!(At(-32) is LuaComputer computer)) return "no computer";
+            var list = new System.Collections.Generic.List<string>();
+            foreach (var item in computer.predecessors.Items) list.Add(Lua.Describe(item.Command));
+            list.Reverse();
+            return string.Join("; ", list.ToArray());
+        }
+
+        // Links every machine into the computer, after Wire(): what each link said.
+        public static string WireMachines()
+        {
+            if (!(At(-32) is LuaComputer computer)) return "no computer";
+            var report = new System.Collections.Generic.List<string>();
+            for (int i = 0; i < Machines.Length; i++)
+            {
+                var machine = At(MachineX(i), 0, MachineZ);
+                report.Add($"{Machines[i].name}: " + (machine == null ? "no command" : $"{Kind(machine)} {Link(machine, computer)}"));
+            }
+            return string.Join("; ", report.ToArray());
+        }
+
+        // The computer's inputs in the order a script counts them, with the value each reads.
+        public static string Order()
+        {
+            if (!(At(-32) is LuaComputer computer)) return "no computer";
+            return string.Join("; ", computer.Inputs.Select((b, i) => $"{i + 1} {Lua.Describe(b)} = {Lua.StateOf(b, computer):0.###}").ToArray());
+        }
 
         public static string Wire()
         {
-            if (rig == null) return "no rig";
+            if (Rig == null) return "no rig";
             ICommand sw = At(-64), computer = At(-32), light = At(0), lamp = At(32), screen = At(64);
             var found = $"switch {Kind(sw)}, computer {Kind(computer)}, light {Kind(light)}, lamp {Kind(lamp)}, screen {Kind(screen)}";
             if (sw == null || computer == null || light == null || lamp == null || screen == null) return "not all commands yet: " + found;
@@ -114,7 +164,7 @@ end
 
         public static string State()
         {
-            if (rig == null) return "no rig";
+            if (Rig == null) return "no rig";
             ICommand sw = At(-64), computer = At(-32), light = At(0), lamp = At(32);
             string s(ICommand c) => c == null ? "missing" : c.State.ToString("0.##");
             var status = computer is LuaComputer lc ? Lua.ComputerStatus(lc).Replace("\n", " | ") : "no computer";

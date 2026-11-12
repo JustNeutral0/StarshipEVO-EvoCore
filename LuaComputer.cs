@@ -195,6 +195,12 @@ namespace EvoCore
             }
             catch (Exception e) { Core.Log.Error("Lua Computer: couldn't read its stored program: " + e.Message); }
         }
+        public override void OnPredecessorAdded(ICommand predecessor, bool onLoad, bool onInit)
+        {
+            base.OnPredecessorAdded(predecessor, onLoad, onInit);
+            if (!onLoad && !onInit) Lua.NoteLinked(this, predecessor);
+        }
+
         public override string OverText => Mainframes.TerminalOf(this) is Mainframe m ? Mainframes.TerminalStatus(m) : Lua.ComputerStatus(this);
         public override string OverTextIndirect => "Lua Computer";
 
@@ -232,9 +238,10 @@ namespace EvoCore
 
         protected virtual string DefaultScript => "computer";
 
-        // Linked blocks, oldest link first. (The game keeps a computer's links newest first, and that order survives
-        // saving; named ports (Ports.cs) are the way not to depend on it at all.)
-        public List<ICommand> Inputs => Linked(predecessors);
+        // Linked blocks, oldest link first. The game keeps a computer's links newest first; outgoing ones come back
+        // in that order after loading, incoming ones don't, so those follow the order kept in PortMap (Ports.cs).
+        // Named ports are the way not to depend on link order at all.
+        public List<ICommand> Inputs => Lua.Ordered(this, Linked(predecessors));
         public List<ICommand> Outputs => Linked(targets);
 
         static List<ICommand> Linked(CommandLinkData links)
